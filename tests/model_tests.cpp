@@ -87,6 +87,13 @@ int main() {
         report.errors.push_back("disk full");
         report.conclude();
         require(report.summary == "host_error", "host precedence");
+        RunReport dirty_cleanup;
+        dirty_cleanup.exit_code = 0;
+        dirty_cleanup.cleanup_errors.push_back("cgroup still populated");
+        dirty_cleanup.conclude();
+        require(dirty_cleanup.summary == "success" && dirty_cleanup.cli_code() == 0,
+                "a cleanup failure must not rewrite the target result");
+        require(!dirty_cleanup.cleanup_errors.empty(), "the cleanup failure stays reported");
         report.id = "quote\"slash\\newline\n中文";
         auto serialized = report.json().dump();
         require(Json::parse(serialized)["run_id"] == report.id, "JSON escaping and UTF8");

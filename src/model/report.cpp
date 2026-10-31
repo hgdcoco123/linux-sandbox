@@ -68,7 +68,9 @@ Json RunReport::json() const {
               {"errors", cleanup_errors}}}};
 }
 void RunReport::conclude() {
-    if (!errors.empty() || !cleanup_errors.empty())
+    // Cleanup failures live in their own field: a target that exited 0 keeps
+    // exit code 0, and callers that care about reclamation read `cleanup`.
+    if (!errors.empty())
         summary = "host_error";
     else if (!exec_error.empty())
         summary = "startup_failure";
