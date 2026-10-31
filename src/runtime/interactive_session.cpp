@@ -182,97 +182,90 @@ class SessionController {
         if (n < 0) system_error("write command stdin");
         return {{"accepted_bytes", n}};
     }
-    Json handle(const Json &wire) {
-        Json j;
-        try {
-            // ControlServer has already bounded the received wire packet.
-            j = validate_session_request(wire, false);
-        } catch (const SessionError &) {
-            throw;
-        } catch (const std::exception &e) {
-            throw SessionError("INVALID_REQUEST", e.what());
-        }
-        auto op = j.at("op").get<std::string>();
-        if (j.contains("command_id") && (op == "stdin" || op == "stdin-close" || op == "cancel")) {
+    // Typed dispatch. The wire shape is decoded once, in the overload below, so
+    // every branch here works on validated business types.
+    Json handle(const SessionRequest &request) {
+        const auto check_active = [&](const CommandIndex &command) {
             if (!execution_ || !execution_->record ||
-                execution_->record->id.str() != j.at("command_id").get<std::string>())
+                execution_->record->id.str() != command.str())
                 throw SessionError("COMMAND_NOT_ACTIVE", "command is no longer active");
-        }
-        if (op == "status")
-            return snapshot();
-        if (op == "request-status")
-            return records_->request_status(j.at("request_id").get<std::string>(), current());
-        if (op == "execute")
-            return start(ExecuteRequest::parse(j));
-        if (op == "close") {
-            close("closed");
-            return {{"status", "accepted"}};
-        }
-        if (op == "cancel") {
-            if (!current().is_null() && !lifecycle_.stopping()) {
-                lifecycle_.require_running();
-                launcher_->init_channel().send(CancelCommand{});
-                if (execution_)
-                    execution_->input.write.reset();
-            }
-            return {{"status", "accepted"}, {"active", !current().is_null()}};
-        }
-        if (op == "stdin") {
-            auto bytes = j.at("bytes").get<std::vector<unsigned>>();
-            if (bytes.size() > 4096)
-                throw std::runtime_error("stdin chunk exceeds 4096 bytes");
-            std::string data;
-            for (auto n : bytes) {
-                if (n > 255)
-                    throw std::runtime_error("invalid byte");
-                data += static_cast<char>(n);
-            }
-            return write_stdin({CommandId::parse(j.at("command_id").get<std::string>()), std::move(data)});
-        }
-        if (op == "stdin-close") {
-            lifecycle_.require_running();
-            if (execution_)
-                execution_->input.write.reset();
-            return {{"closed", true}};
-        }
-        if (op == "output" || op == "result") {
-            auto id = j.at("command_id").get<std::string>();
-            validate_command_id(id);
-            auto path = store_->directory() / id;
-            if (op == "result")
-                return records_->result(id);
-            auto stream = j.value("stream", "stdout");
-            if (stream != "stdout" && stream != "stderr")
-                throw std::runtime_error("invalid stream");
-            auto offset = j.value("offset", std::uint64_t(0));
-            if (offset > config_.limits.capture_bytes)
-                throw std::runtime_error("offset exceeds capture limit");
-            auto fd = open_path(path / (stream + ".bin"), O_RDONLY);
-            unsigned char data[2048];
-            auto n = ::pread(fd.get(), data, sizeof(data), static_cast<off_t>(offset));
-            checked(static_cast<int>(n), "read captured output");
-            return {{"offset", offset},
-                    {"next_offset", offset + n},
-                    {"bytes", std::vector<unsigned char>(data, data + n)},
-                    {"finished", fs::exists(path / "result.json")}};
-        }
-        if (op == "files") {
-            lifecycle_.require_idle();
-            if (config_.mode != "isolated")
-                throw SessionError("POLICY_DENIED", "managed files require isolated mode");
-            // Decode once at the boundary: the service then receives a typed
-            // operation instead of the client's wire shape.
-            std::string error;
-            auto decoded = session_request_from_json(
-                Json{{"op", "files"}, {"request", j.at("request")}}, error);
-            if (!decoded)
-                throw SessionError("INVALID_REQUEST", error);
-            const auto *operation = decoded->as<Workspace>();
-            if (!operation)
-                throw SessionError("INVALID_REQUEST", "expected a workspace operation");
-            return workspace_->handle(*operation);
-        }
-        throw std::runtime_error("unknown session operation");
+        };
+        return std::visit(
+            [&](const auto &value) -> Json {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, Status>) {
+                    return snapshot();
+                } else if constexpr (std::is_same_v<T, RequestStatusQuery>) {
+                    return records_->request_status(value.key.str(), current());
+                } else if constexpr (std::is_same_v<T, Execute>) {
+                    // Transitional: the storage layer still speaks the legacy
+                    // request type, so the typed request is converted once here.
+                    const auto &typed = value.request;
+                    std::optional<std::string> key;
+                    if (typed.key())
+                        key = typed.key()->str();
+                    std::optional<std::string> cwd;
+                    if (typed.cwd())
+                        cwd = typed.cwd()->string();
+                    std::optional<std::uint64_t> wall;
+                    if (typed.timeout())
+                        wall = static_cast<std::uint64_t>(typed.timeout()->count());
+                    return start(ExecuteRequest::from_fields(std::move(key), typed.argv(),
+                                                            std::move(cwd), typed.env(), wall));
+                } else if constexpr (std::is_same_v<T, Close>) {
+                    close("closed");
+                    return {{"status", "accepted"}};
+                } else if constexpr (std::is_same_v<T, Cancel>) {
+                    if (!current().is_null() && !lifecycle_.stopping()) {
+                        lifecycle_.require_running();
+                        if (value.command)
+                            check_active(*value.command);
+                        launcher_->init_channel().send(CancelCommand{});
+                        if (execution_)
+                            execution_->input.write.reset();
+                    }
+                    return {{"status", "accepted"}, {"active", !current().is_null()}};
+                } else if constexpr (std::is_same_v<T, StdinWrite>) {
+                    check_active(value.command);
+                    return write_stdin({CommandId::parse(value.command.str()), value.bytes});
+                } else if constexpr (std::is_same_v<T, StdinClose>) {
+                    check_active(value.command);
+                    lifecycle_.require_running();
+                    if (execution_)
+                        execution_->input.write.reset();
+                    return {{"closed", true}};
+                } else if constexpr (std::is_same_v<T, ReadResult>) {
+                    return records_->result(value.command.str());
+                } else if constexpr (std::is_same_v<T, ReadOutput>) {
+                    if (value.offset > config_.limits.capture_bytes)
+                        throw std::runtime_error("offset exceeds capture limit");
+                    const auto path = store_->directory() / value.command.str();
+                    const auto stream =
+                        value.stream == Stream::standard_output ? "stdout" : "stderr";
+                    auto fd = open_path(path / (std::string(stream) + ".bin"), O_RDONLY);
+                    unsigned char data[2048];
+                    auto n = ::pread(fd.get(), data, sizeof(data), static_cast<off_t>(value.offset));
+                    checked(static_cast<int>(n), "read captured output");
+                    return {{"offset", value.offset},
+                            {"next_offset", value.offset + static_cast<std::uint64_t>(n)},
+                            {"bytes", std::vector<unsigned char>(data, data + n)},
+                            {"finished", fs::exists(path / "result.json")}};
+                } else {
+                    lifecycle_.require_idle();
+                    if (config_.mode != "isolated")
+                        throw SessionError("POLICY_DENIED", "managed files require isolated mode");
+                    return workspace_->handle(value);
+                }
+            },
+            request.operation());
+    }
+    // Wire entry point: decode once, then the typed overload takes over.
+    Json handle(const Json &wire) {
+        std::string error;
+        auto decoded = session_request_from_json(wire, error);
+        if (!decoded)
+            throw SessionError("INVALID_REQUEST", error);
+        return handle(*decoded);
     }
     void event(ControlEnvelope envelope, bool parent) {
         if (parent) {
