@@ -142,6 +142,45 @@ void test_policy_validation() {
     }
     check(rejected, "an unbounded snapshot is rejected");
 }
+// Deterministic property check: whatever the policy and the entry, an accepted
+// admission must stay inside every budget, and a rejection must name a reason.
+void test_properties() {
+    std::uint64_t state = 0x9e3779b97f4a7c15ull;
+    auto next = [&state](std::uint64_t limit) {
+        state = state * 6364136223846793005ull + 1442695040888963407ull;
+        return limit == 0 ? 0 : (state >> 33) % limit;
+    };
+    for (int iteration = 0; iteration < 2000; ++iteration) {
+        WorkspacePolicy p;
+        p.max_bytes = 1 + next(5000);
+        p.max_entries = static_cast<std::uint32_t>(1 + next(50));
+        p.max_depth = static_cast<std::uint8_t>(1 + next(8));
+
+        EntryFacts entry;
+        entry.size = next(4000);
+        entry.depth = static_cast<std::uint8_t>(next(10));
+        const auto kind = next(6);
+        entry.regular = kind == 0;
+        entry.symlink = kind == 1;
+        entry.hardlink = kind == 2;
+        entry.escapes_root = kind == 3;
+
+        const auto bytes_used = next(p.max_bytes + 1);
+        const auto entries_used = static_cast<std::uint32_t>(next(p.max_entries + 1));
+        const auto admission = admit(p, bytes_used, entries_used, entry);
+
+        const bool structural =
+            entry.symlink || entry.hardlink || !entry.regular || entry.escapes_root;
+        if (admission.accepted()) {
+            check(!structural, "an accepted entry is a plain file inside the root");
+            check(entry.depth <= p.max_depth, "an accepted entry is within the depth budget");
+            check(entry.size <= p.max_bytes - bytes_used, "an accepted entry fits the byte budget");
+            check(entries_used < p.max_entries, "an accepted entry has an entry slot");
+        }
+        check(admission.bytes_after <= p.max_bytes, "reported bytes stay inside the budget");
+        check(admission.entries_after <= p.max_entries, "reported count stays inside the budget");
+    }
+}
 } // namespace
 
 int main() {
@@ -149,6 +188,7 @@ int main() {
     test_structural_refusals();
     test_no_overflow();
     test_policy_validation();
+    test_properties();
     if (failures != 0) {
         std::printf("%d workspace check(s) failed\n", failures);
         return 1;
