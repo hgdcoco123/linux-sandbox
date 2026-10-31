@@ -1,3 +1,4 @@
+#include "sandbox/core/prepare.hpp"
 #include "sandbox/core/supervisor.hpp"
 #include "sandbox/event_loop.hpp"
 #include "sandbox/session.hpp"
@@ -11,6 +12,7 @@
 #include <thread>
 #include <unistd.h>
 #include <variant>
+#include <vector>
 
 namespace sandbox {
 namespace {
@@ -120,28 +122,90 @@ void RunSession::prepare() {
     logger_->flush_on(spdlog::level::warn);
     transition(RunState::preparing);
     logger_->info("run directory: {}", store_->directory().string());
-    control_ = std::make_unique<ControlServer>(store_->directory() / "control.sock");
-    if (config_.mode == "isolated")
-        cgroup_ = std::make_unique<CgroupV2>(config_.cgroup_root, store_->id(), config_.limits);
-    if (cgroup_)
-        sampler_ = std::make_unique<MetricsSampler>(cgroup_->path(), MetricRegistry::defaults(),
-                                                    config_.metrics.interval_ms,
-                                                    config_.metrics.history_limit);
     auto root = store_->directory() / "rootfs";
     checked(::mkdir(root.c_str(), 0700), "create root mountpoint");
-    auto out = Pipe::create(), err = Pipe::create();
-    auto out_file = open_path(store_->directory() / "stdout.bin", O_WRONLY | O_CREAT | O_EXCL);
-    auto err_file = open_path(store_->directory() / "stderr.bin", O_WRONLY | O_CREAT | O_EXCL);
-    auto in = open_path(config_.stdin_file.empty() ? fs::path("/dev/null") : config_.stdin_file,
-                        O_RDONLY);
-    stdout_ = std::make_unique<OutputCapture>(std::move(out.read), std::move(out_file),
-                                              config_.limits.capture_bytes);
-    stderr_ = std::make_unique<OutputCapture>(std::move(err.read), std::move(err_file),
-                                              config_.limits.capture_bytes);
-    transition(RunState::starting);
-    launcher_ = std::make_unique<LauncherClient>(config_, launcher_path_, root, in.get(),
-                                                 out.write.get(), err.write.get());
-    // out/err write ends are closed on return, leaving only the target environment's copies.
+    // The state directory is deliberately not undone: the report lives there even
+    // when preparation fails. Everything else is journaled and rolled back.
+    std::vector<PrepareStepSpec> steps;
+    steps.push_back({PrepareStep::control_socket,
+                     [this] {
+                         control_ = std::make_unique<ControlServer>(store_->directory() /
+                                                                    "control.sock");
+                     },
+                     [this] { control_.reset(); }});
+    steps.push_back({PrepareStep::cgroup,
+                     [this] {
+                         if (config_.mode != "isolated")
+                             return;
+                         cgroup_ = std::make_unique<CgroupV2>(config_.cgroup_root, store_->id(),
+                                                              config_.limits);
+                         sampler_ = std::make_unique<MetricsSampler>(
+                             cgroup_->path(), MetricRegistry::defaults(),
+                             config_.metrics.interval_ms, config_.metrics.history_limit);
+                     },
+                     [this] {
+                         if (!cgroup_)
+                             return;
+                         try {
+                             cgroup_->kill_all();
+                             cgroup_->remove();
+                         } catch (...) {
+                         }
+                         cgroup_.reset();
+                         sampler_.reset();
+                     }});
+    steps.push_back({PrepareStep::output_capture,
+                     [this] {
+                         auto out = Pipe::create(), err = Pipe::create();
+                         auto out_file = open_path(store_->directory() / "stdout.bin",
+                                                   O_WRONLY | O_CREAT | O_EXCL);
+                         auto err_file = open_path(store_->directory() / "stderr.bin",
+                                                   O_WRONLY | O_CREAT | O_EXCL);
+                         stdout_ = std::make_unique<OutputCapture>(
+                             std::move(out.read), std::move(out_file), config_.limits.capture_bytes);
+                         stderr_ = std::make_unique<OutputCapture>(
+                             std::move(err.read), std::move(err_file), config_.limits.capture_bytes);
+                         // Keep the child's write ends until the launcher has them.
+                         pipe_out_ = std::move(out.write);
+                         pipe_err_ = std::move(err.write);
+                     },
+                     [this] {
+                         stdout_.reset();
+                         stderr_.reset();
+                         pipe_out_.reset();
+                         pipe_err_.reset();
+                     }});
+    steps.push_back({PrepareStep::launcher,
+                     [this, root] {
+                         auto in = open_path(
+                             config_.stdin_file.empty() ? fs::path("/dev/null") : config_.stdin_file,
+                             O_RDONLY);
+                         transition(RunState::starting);
+                         launcher_ = std::make_unique<LauncherClient>(config_, launcher_path_, root,
+                                                                      in.get(), pipe_out_.get(),
+                                                                      pipe_err_.get());
+                         // Keeping the write ends here would prevent EOF; the launcher
+                         // owns them from now on.
+                         pipe_out_.reset();
+                         pipe_err_.reset();
+                     },
+                     [this] {
+                         if (launcher_) {
+                             try {
+                                 launcher_->abort();
+                             } catch (...) {
+                             }
+                         }
+                         launcher_.reset();
+                     }});
+    PrepareSequence sequence{std::move(steps)};
+    auto outcome = sequence.run();
+    if (!outcome.ok) {
+        const auto detail = describe(outcome);
+        report_.errors.push_back(detail);
+        apply(core_->prepare_failed(detail, now_ms()));
+        throw std::runtime_error(detail);
+    }
 }
 
 void RunSession::apply(const std::vector<SupervisionAction> &actions) {
@@ -178,7 +242,10 @@ void RunSession::apply(const std::vector<SupervisionAction> &actions) {
             },
             action);
     }
-    if (core_ && core_->phase() == Phase::stopping)
+    // Any phase past running means the execution is winding down, and the report
+    // state machine must follow it into "stopping" before finalize().
+    if (core_ && core_->phase() != Phase::running && core_->phase() != Phase::starting &&
+        core_->phase() != Phase::idle)
         mark_stopping();
 }
 
@@ -389,6 +456,7 @@ void RunSession::supervise(SignalSource &signals) {
 }
 
 void RunSession::finalize() {
+    mark_stopping();
     transition(RunState::finalizing);
     const Millis now = now_ms();
     if (core_ && !core_->finished()) {

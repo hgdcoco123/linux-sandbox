@@ -41,6 +41,8 @@ class RunSession {
     std::unique_ptr<MetricsSampler> sampler_;
     std::unique_ptr<LauncherClient> launcher_;
     std::unique_ptr<OutputCapture> stdout_, stderr_;
+    // Target-side write ends, held only between pipe creation and launcher spawn.
+    UniqueFd pipe_out_, pipe_err_;
     std::uint64_t started_ = 0;
     bool init_created_ = false, env_ready_ = false, init_done_ = false, init_reaped_ = false;
     bool init_abnormal_ = false;

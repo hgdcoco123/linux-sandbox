@@ -85,6 +85,14 @@ struct ExecutionResult {
 - 允许稀疏序列：process 后端没有 cgroup / id_map，序列里不出现这些步骤即可。
 - `describe()` 给出一行可读结论，直接进日志与报告。
 
+**接线（P4.5）**：`RunSession::prepare()` 把 control socket、cgroup、输出捕获、launcher 四步
+交给 `PrepareSequence`，失败时逆序撤销并给出一行原因。状态目录**不撤销**——报告要写在那里；
+launcher 步骤的撤销是 `LauncherClient::abort()`。
+
+接线时发现一个只有真跑才会暴露的缺陷：执行核心在正常退出后进入 `draining` 而不是
+`stopping`，而报告状态机只允许 `stopping → finalizing`，于是"正常跑完"会触发非法迁移。
+现在只要核心离开 running 就把报告状态推进到 stopping，`finalize()` 入口再兜一次。
+
 ## 3.8 RunSession 已接入执行核心
 
 `src/runtime/run_session.cpp` 不再自己判断超时、宽限期、强杀时机与完成条件：
@@ -138,6 +146,7 @@ struct ExecutionResult {
 | P3.5 | `RunSession` 接入执行核心（单次执行） | `[完成]` |
 | P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
+| P4.5 | `RunSession` 用准备序列执行并在失败时逆序回滚 | `[完成]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
 | P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` |
 | P6.5 | `protocol.cpp`/launcher/init/会话/runsession 全部改用 `ControlMessage` | `[完成]` 控制通道已无 JSON |
