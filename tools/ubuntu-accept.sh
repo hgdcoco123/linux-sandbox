@@ -23,6 +23,14 @@ run() { # run <name> <command...>: capture output, record the exit code
 
 log "root: $root"
 log "date: $(date -Is)"
+if [ -d "$root/.git" ]; then
+    log "commit: $(git -C "$root" rev-parse --short HEAD 2>/dev/null) $(git -C "$root" log -1 --format=%s 2>/dev/null)"
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+        log "warning: working tree has uncommitted changes"
+    fi
+else
+    log "commit: (not a git checkout - copy the repository for reproducible results)"
+fi
 {
     uname -a
     cat /etc/os-release
