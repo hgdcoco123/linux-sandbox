@@ -3,7 +3,7 @@
 namespace sandbox {
 Json WorkspaceService::handle(const Json &request) {
     auto publish = [&](const Json &request) {
-        auto value = file_request(request);
+        auto value = file_request(request, policy_);
         // Keep complete manifests on disk; bound the control response independently.
         store_.write("artifacts.json", value);
         auto count = value.at("entries").size();

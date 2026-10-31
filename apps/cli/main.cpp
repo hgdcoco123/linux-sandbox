@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
             std::ifstream in(options.at("--request"));
             sandbox::Json request;
             in >> request;
-            output = command == "files" ? sandbox::file_request(request)
+            output = command == "files" ? sandbox::file_request(request, sandbox::WorkspacePolicy{})
                                         : sandbox::ControlServer::request(state, id, request);
         } else if (command == "run") {
             auto report = app.run(options.at("--config"), unsafe);

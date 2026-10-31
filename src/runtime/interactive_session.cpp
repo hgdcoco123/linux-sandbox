@@ -367,7 +367,8 @@ class SessionController {
         store_->owner_update({{"persistent", true}});
         records_ = std::make_unique<SessionStore>(*store_);
         workspace_ =
-            std::make_unique<WorkspaceService>(store_->directory() / "workspace", *records_);
+            std::make_unique<WorkspaceService>(store_->directory() / "workspace", *records_,
+                                               config_.workspace);
         try {
             auto rootfs = store_->directory() / "rootfs";
             checked(::mkdir(rootfs.c_str(), 0700), "create session rootfs");

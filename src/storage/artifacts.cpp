@@ -122,7 +122,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
         checked(::fsync(dest), "fsync artifact directory");
 }
 } // namespace
-Json file_request(const Json &j) {
+Json file_request(const Json &j, const WorkspacePolicy &policy) {
     require_keys(j, {"op", "source", "destination"}, "files");
     for (auto name : {"source", "destination"})
         if (j.contains(name) && j.at(name).get<std::string>().find('\0') != std::string::npos)
@@ -132,7 +132,7 @@ Json file_request(const Json &j) {
         throw std::runtime_error("unknown file operation");
     auto source = fs::absolute(j.at("source").get<std::string>()).lexically_normal();
     auto input = directory(source);
-    Budget budget;
+    Budget budget{&policy};
     Json manifest = Json::array();
     if (op == "manifest") {
         walk(input.get(), -1, "", budget, manifest);
