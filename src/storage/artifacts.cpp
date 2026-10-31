@@ -1,3 +1,4 @@
+#include "sandbox/core/workspace.hpp"
 #include "sandbox/interactive.hpp"
 #include "sandbox/linux.hpp"
 #include "sandbox/sha256.hpp"
@@ -9,11 +10,13 @@
 #include <unistd.h>
 namespace sandbox {
 namespace {
-constexpr std::uint64_t max_bytes = 256ULL * 1024 * 1024;
-constexpr std::size_t max_entries = 4096;
+// Limits live in WorkspacePolicy; this default keeps the historical behaviour
+// until the caller supplies a configured policy.
+const WorkspacePolicy default_workspace_policy{};
 struct Budget {
+    const WorkspacePolicy *policy = &default_workspace_policy;
     std::uint64_t bytes = 0;
-    std::size_t entries = 0;
+    std::uint32_t entries = 0;
 };
 UniqueFd directory(const fs::path &path) {
     // Walk every path component without following symlinks, including ancestors.
@@ -29,7 +32,8 @@ UniqueFd directory(const fs::path &path) {
     return fd;
 }
 void walk(int source, int dest, const std::string &prefix, Budget &budget, Json &manifest) {
-    if (prefix.size() > 4096 || std::count(prefix.begin(), prefix.end(), '/') > 64)
+    if (prefix.size() > 4096 ||
+        std::count(prefix.begin(), prefix.end(), '/') > static_cast<int>(budget.policy->max_depth))
         throw std::runtime_error("artifact directory depth/path limit exceeded");
     DIR *raw =
         ::fdopendir(checked(::fcntl(source, F_DUPFD_CLOEXEC, 3), "duplicate tree directory"));
@@ -41,7 +45,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
         std::string name = entry->d_name;
         if (name == "." || name == "..")
             continue;
-        if (++budget.entries > max_entries)
+        if (++budget.entries > budget.policy->max_entries)
             throw std::runtime_error("artifact entry limit exceeded");
         struct stat before{};
         checked(::fstatat(source, name.c_str(), &before, AT_SYMLINK_NOFOLLOW), "stat artifact");
@@ -87,7 +91,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
                 size += n;
                 budget.bytes += n;
                 digest.update(std::string_view(buf.data(), n));
-                if (budget.bytes > max_bytes)
+                if (budget.bytes > budget.policy->max_bytes)
                     throw std::runtime_error("artifact byte limit exceeded");
                 if (output)
                     write_all(output.get(), std::string_view(buf.data(), n));
