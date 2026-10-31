@@ -57,7 +57,11 @@ class CommandIndex {
     [[nodiscard]] static std::optional<CommandIndex> parse(std::string_view text) noexcept;
 
     [[nodiscard]] std::uint32_t number() const noexcept { return number_; }
-    [[nodiscard]] std::string str() const { return "cmd-" + std::to_string(number_); }
+    [[nodiscard]] std::string str() const {
+        std::string text = "cmd-";
+        text += std::to_string(number_);
+        return text;
+    }
     friend auto operator<=>(const CommandIndex &, const CommandIndex &) = default;
 
   private:

@@ -41,8 +41,20 @@ struct ExecutionResult {
 - `OutputResult::complete()` 明确区分"截断"（主动丢弃）与"写失败"（丢数据）。
 - 旧实现 `RunReport::conclude()` 把 `cleanup_errors` 并入 `host_error` 的路径在新模型里不存在。
 
-## 4. 仍然沿用的决定
+## 3.5 控制报文：内部二进制，对外 protobuf
 
+**决策**：`sandbox` ↔ `sandbox-launcher` / `init` 的内部通道不再用 JSON，也不用 protobuf，
+而是 `core/wire.hpp` 定义的长度前缀二进制帧（magic `SBX2` + kind + tag + varint 长度）。
+
+- 消息集合是封闭的（10 种请求、8 种回复），不需要 schema 演进。
+- 旧实现的真正问题不是"JSON 慢"，而是"protobuf 解成 JSON、再解成业务对象"的三段式；
+  换编码本身解决不了它，**改成类型化对象**才解决。
+- 帧头在解析任何字段之前就拒绝：magic 错、kind 错、长度越界、payload 后面还有字节、超过 16KiB。
+- 结果负载不重复定义：`ResultReply` 搬运的就是 `record_json.hpp` 产出的存储记录，控制层不解释它。
+- 对外 SDK 通道（`proto/session_v1.proto`）仍是 protobuf，两条通道互不影响。
+- 若要求内部也用 protobuf，替换点只有 `src/core/wire.cpp` 一个文件。
+
+## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
 - 停止流程只有一条：记录原因 → 停止受理输入 → 请求退出 → 宽限期 → 强制终止 → 确认集合为空 → 收尾输出 → 落盘。取消与超时只是入口不同。
 - 输出仍是有界队列 + 写线程；`write()` 完成不等于 `fsync()` 完成，报告里始终分开。
@@ -53,7 +65,7 @@ struct ExecutionResult {
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P1 | 核心类型、结果三分、记录边界 + 可移植测试 | `[完成]` |
-| P2 | 类型化会话请求/响应（替换 `j["op"]` 分派与 JSON 报文） | `[待做]` |
+| P2 | 类型化会话请求/响应 + 二进制控制报文（`core/ops.hpp`、`core/wire.hpp`） | `[完成]` 模型与编解码；控制器接线在 P3 |
 | P3 | 统一 `Execution` 核心，`RunController`/`SessionController` 退化为外壳 | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚，产出 `CleanupResult` | `[待做]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
