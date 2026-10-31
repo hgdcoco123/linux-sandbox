@@ -71,6 +71,8 @@ class ExecutionCore {
     std::vector<SupervisionAction> output_finished(bool is_stderr, const OutputStats &, Millis now);
     std::vector<SupervisionAction> supervisor_failed(std::string reason, Millis now);
     std::vector<SupervisionAction> prepare_failed(std::string reason, Millis now);
+    // The environment came up but the target could not be exec'd.
+    std::vector<SupervisionAction> start_failed(std::string reason, Millis now);
     std::vector<SupervisionAction> tick(Millis now);
 
     // Cleanup facts that the runtime learns after the target result is sealed.
@@ -82,6 +84,8 @@ class ExecutionCore {
     [[nodiscard]] bool finished() const noexcept { return finished_; }
     [[nodiscard]] Phase phase() const noexcept { return phase_; }
     [[nodiscard]] const ExecutionResult &result() const noexcept { return result_; }
+    // Cleanup facts arrive after the run; the runtime fills them in.
+    [[nodiscard]] ExecutionResult &result() noexcept { return result_; }
 
   private:
     [[nodiscard]] bool outcome_decided() const noexcept { return outcome_.has_value(); }

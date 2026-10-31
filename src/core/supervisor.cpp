@@ -193,6 +193,18 @@ std::vector<SupervisionAction> ExecutionCore::prepare_failed(std::string reason,
     return {Completed{}};
 }
 
+std::vector<SupervisionAction> ExecutionCore::start_failed(std::string reason, Millis now) {
+    if (finished_)
+        return {};
+    if (!outcome_)
+        outcome_ = ExecutionOutcome(StartupFailed{std::move(reason)});
+    if (phase_ == Phase::stopping || phase_ == Phase::draining || phase_ == Phase::failed)
+        return maybe_finish(now);
+    phase_ = Phase::stopping;
+    stop_at_ = now;
+    return {SignalTarget{sigterm}};
+}
+
 std::vector<SupervisionAction> ExecutionCore::tick(Millis now) {
     if (finished_)
         return {};

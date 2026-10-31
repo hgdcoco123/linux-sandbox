@@ -1,3 +1,4 @@
+#include "sandbox/core/supervisor.hpp"
 #include "sandbox/event_loop.hpp"
 #include "sandbox/session.hpp"
 #include <fcntl.h>
@@ -9,9 +10,58 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <variant>
+
 namespace sandbox {
+namespace {
+Millis now_ms() {
+    return Millis{static_cast<std::int64_t>(monotonic_ms())};
+}
+
+SupervisionLimits core_limits(const Limits &limits) {
+    SupervisionLimits core;
+    core.startup = Millis{static_cast<std::int64_t>(limits.startup_ms)};
+    core.wall = Millis{static_cast<std::int64_t>(limits.wall_ms)};
+    core.grace = Millis{static_cast<std::int64_t>(limits.grace_ms)};
+    // Drain and settle are supervision allowances, not user policy: they bound
+    // how long we keep waiting for facts that should already be on their way.
+    core.drain = Millis{5000};
+    core.settle = Millis{4000};
+    return core;
+}
+
+OutputStats stats_of(const StreamReport &report) {
+    OutputStats stats;
+    stats.saved_bytes = report.saved;
+    stats.discarded_bytes = report.discarded;
+    stats.failed_bytes = report.failed_bytes;
+    stats.queue_peak_bytes = report.queue_peak_bytes;
+    stats.backpressure_events = report.backpressure_events;
+    stats.write_error = report.write_error;
+    return stats;
+}
+
+// Report vocabulary. The outcome is the source of truth; this only names it.
+const char *summary_of(const ExecutionOutcome &outcome) {
+    if (auto code = outcome.exit_code())
+        return *code == 0 ? "success" : "nonzero_exit";
+    if (outcome.term_signal())
+        return "signaled";
+    if (std::holds_alternative<TimedOut>(outcome.variant()))
+        return "timeout";
+    if (std::holds_alternative<Cancelled>(outcome.variant()))
+        return "cancelled";
+    if (std::holds_alternative<Oom>(outcome.variant()))
+        return "oom";
+    if (std::holds_alternative<StartupFailed>(outcome.variant()))
+        return "startup_failure";
+    return "host_error";
+}
+} // namespace
+
 RunSession::RunSession(RunConfig c, fs::path root, fs::path launcher)
     : config_(std::move(c)), state_root_(std::move(root)), launcher_path_(std::move(launcher)) {}
+
 Json RunSession::live_metrics() const {
     if (sampler_)
         return {{"metrics", sampler_->live_snapshot()}};
@@ -21,6 +71,7 @@ Json RunSession::live_metrics() const {
                              ? "diagnostic process backend has no per-run cgroup metrics"
                              : "sampler not prepared"}}}};
 }
+
 void RunSession::sample_metrics(bool force) {
     if (!sampler_)
         return;
@@ -32,10 +83,10 @@ void RunSession::sample_metrics(bool force) {
             logger_->warn("metrics sampling failed: {}", e.what());
         return; // Optional observation cannot replace the execution or cancellation policy.
     }
-    // Persistence errors remain host errors, rather than being hidden as collector failures.
     if (updated && store_)
         store_->state(state_.current(), live_metrics());
 }
+
 void RunSession::transition(RunState next) {
     state_.transition(next);
     if (store_)
@@ -43,7 +94,21 @@ void RunSession::transition(RunState next) {
     if (logger_)
         logger_->info("state={}", state_name(next));
 }
+
+void RunSession::mark_stopping() {
+    switch (state_.current()) {
+    case RunState::preparing:
+    case RunState::starting:
+    case RunState::running:
+        transition(RunState::stopping);
+        break;
+    default:
+        break;
+    }
+}
+
 void RunSession::prepare() {
+    core_ = std::make_unique<ExecutionCore>(core_limits(config_.limits), now_ms());
     store_ = RunStore::create(state_root_, config_);
     report_.id = store_->id();
     report_.isolated = config_.mode == "isolated";
@@ -78,11 +143,81 @@ void RunSession::prepare() {
                                                  out.write.get(), err.write.get());
     // out/err write ends are closed on return, leaving only the target environment's copies.
 }
+
+void RunSession::apply(const std::vector<SupervisionAction> &actions) {
+    for (const auto &action : actions) {
+        std::visit(
+            [&](const auto &value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, SignalTarget>) {
+                    if (launcher_ && init_created_ && init_channel_open_) {
+                        try {
+                            launcher_->init_channel().send("STOP");
+                        } catch (const std::exception &e) {
+                            if (logger_)
+                                logger_->warn("stop channel: {}", e.what());
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, KillTarget>) {
+                    // The group is the only scope that cannot be escaped by forking.
+                    try {
+                        if (cgroup_)
+                            cgroup_->kill_all();
+                        else if (launcher_)
+                            send_pidfd_signal(launcher_->init_pidfd(), SIGKILL);
+                    } catch (const std::exception &e) {
+                        report_.cleanup_errors.push_back(std::string("kill: ") + e.what());
+                    }
+                } else if constexpr (std::is_same_v<T, ForceDrain>) {
+                    // Stop accepting new output so the writers can finish.
+                    if (stdout_)
+                        stdout_->close_incomplete();
+                    if (stderr_)
+                        stderr_->close_incomplete();
+                }
+            },
+            action);
+    }
+    if (core_ && core_->phase() == Phase::stopping)
+        mark_stopping();
+}
+
+void RunSession::request_cancel() {
+    if (!core_ || core_->finished())
+        return;
+    apply(core_->stop_requested(StopIntent::cancel, now_ms()));
+}
+
+void RunSession::observe_streams(Millis now) {
+    if (stdout_) {
+        const auto summary = stdout_->summary();
+        if (!out_eof_seen_ && summary.eof) {
+            out_eof_seen_ = true;
+            apply(core_->output_eof(false, now));
+        }
+        if (!out_done_seen_ && stdout_->complete()) {
+            out_done_seen_ = true;
+            apply(core_->output_finished(false, stats_of(summary), now));
+        }
+    }
+    if (stderr_) {
+        const auto summary = stderr_->summary();
+        if (!err_eof_seen_ && summary.eof) {
+            err_eof_seen_ = true;
+            apply(core_->output_eof(true, now));
+        }
+        if (!err_done_seen_ && stderr_->complete()) {
+            err_done_seen_ = true;
+            apply(core_->output_finished(true, stats_of(summary), now));
+        }
+    }
+}
+
 void RunSession::on_launcher(Message message) {
     auto kind = message.body.at("kind").get<std::string>();
     auto p = message.body.at("payload");
     if (kind == "INIT_CREATED") {
-        if (init_created_ || (state_.current() != RunState::starting && !stopping_) || !message.fd)
+        if (init_created_ || !message.fd || !core_)
             throw std::runtime_error("unexpected init identity");
         auto pid = p.at("pid").get<pid_t>();
         launcher_->set_init_identity(pid, std::move(message.fd));
@@ -96,7 +231,8 @@ void RunSession::on_launcher(Message message) {
             cgroup_->attach(pid);
             sample_metrics(true); // Establish the baseline before the target can execute.
         }
-        launcher_->init_channel().send(stopping_ ? "STOP" : "PREPARE");
+        const bool stopping = core_->phase() == Phase::stopping || core_->finished();
+        launcher_->init_channel().send(stopping ? "STOP" : "PREPARE");
         logger_->info("init created and resources attached, pid={}", pid);
     } else if (kind == "INIT_REAPED") {
         if (!init_created_ || init_reaped_)
@@ -109,62 +245,48 @@ void RunSession::on_launcher(Message message) {
     else
         throw std::runtime_error("unknown launcher event: " + kind);
 }
+
 void RunSession::on_init(Message message) {
     auto kind = message.body.at("kind").get<std::string>();
     auto p = message.body.at("payload");
+    const Millis now = now_ms();
     if (kind == "ENV_READY") {
         if (!init_created_ || env_ready_)
             throw std::runtime_error("unexpected ENV_READY");
         env_ready_ = true;
         report_.runtime_prepared = true;
-        if (stopping_)
-            return; // STOP is queued; do not send EXEC after cancellation.
-        exec_at_ = monotonic_ms();
-        report_.startup_ms = exec_at_ - started_;
+        apply(core_->env_ready(now));
+        if (core_->phase() != Phase::running)
+            return; // STOP is already queued; never exec after a cancellation.
         launcher_->init_channel().send("EXEC");
         transition(RunState::running);
     } else if (kind == "EXEC_OBSERVED") {
         if (!env_ready_ || report_.exec_observed)
             throw std::runtime_error("unexpected exec observation");
         report_.exec_observed = true;
+        apply(core_->exec_observed(now));
     } else if (kind == "START_FAILED") {
         report_.exec_error = "stage=" + std::to_string(p.at("stage").get<int>()) +
                              ", errno=" + std::to_string(p.at("errno").get<int>());
-        request_stop("startup_failure");
+        apply(core_->start_failed(report_.exec_error, now));
     } else if (kind == "MAIN_EXIT") {
         if (report_.exit_code || report_.term_signal)
             throw std::runtime_error("duplicate MAIN_EXIT");
+        std::optional<int> code, signal;
         if (!p.at("exit_code").is_null())
-            report_.exit_code = p.at("exit_code").get<int>();
+            code = p.at("exit_code").get<int>();
         if (!p.at("signal").is_null())
-            report_.term_signal = p.at("signal").get<int>();
-        request_stop("main_exited");
+            signal = p.at("signal").get<int>();
+        apply(core_->main_exited(code, signal, now));
     } else if (kind == "INIT_DONE") {
         init_done_ = true;
     } else if (kind == "INIT_ERROR") {
         report_.exec_error = p.at("error").get<std::string>();
-        request_stop("startup_failure");
+        apply(core_->start_failed(report_.exec_error, now));
     } else
         throw std::runtime_error("unknown init event: " + kind);
 }
-void RunSession::request_stop(const std::string &reason) {
-    if (stopping_)
-        return;
-    stopping_ = true;
-    stop_at_ = monotonic_ms();
-    report_.stop_reason = reason;
-    transition(RunState::stopping);
-    if (logger_)
-        logger_->warn("stop requested: {}", reason);
-    if (launcher_ && init_created_ && init_channel_open_) {
-        try {
-            launcher_->init_channel().send("STOP");
-        } catch (const std::exception &e) {
-            if (logger_)
-                logger_->warn("stop channel: {}", e.what());
-        }
-    }
-}
+
 void RunSession::supervise(SignalSource &signals) {
     EventLoop poller;
     TickSource ticks;
@@ -180,15 +302,15 @@ void RunSession::supervise(SignalSource &signals) {
             } catch (const ChannelClosed &e) {
                 open = false;
                 channel.close();
-                // Peer can close after queuing its final facts. Unexpected closure is retained as
-                // an error.
+                // A peer may close right after queuing its final facts; an
+                // unexpected closure is a supervision failure, not a target result.
                 if (parent && !init_reaped_) {
                     report_.errors.push_back(
                         std::string(parent ? "launcher channel: " : "init channel: ") + e.what());
-                    request_stop("host_error");
+                    apply(core_->supervisor_failed("launcher channel closed", now_ms()));
                 }
-                if (!parent && !init_done_ && !stopping_)
-                    request_stop("init_channel_closed");
+                if (!parent && !init_done_ && core_->phase() != Phase::stopping)
+                    apply(core_->supervisor_failed("init channel closed", now_ms()));
                 break;
             }
             if (!message)
@@ -230,77 +352,65 @@ void RunSession::supervise(SignalSource &signals) {
                 break;
             case 5:
                 if (signals.drain_cancel())
-                    request_stop("cancelled");
+                    request_cancel();
                 break;
             case 6:
                 ticks.drain();
                 break;
             case 7:
-                if (control_->accept_cancel())
-                    request_stop("cancelled");
                 break;
             default:
                 break;
             }
         }
         if (control_->accept_cancel())
-            request_stop("cancelled");
+            request_cancel();
         // A pipe and its writer completion may both be ready. Drain each stream
         // once per iteration so output cannot double its fairness budget.
-        if (out_ready) stdout_->drain();
-        if (err_ready) stderr_->drain();
-        // waitpid/EOF and peer messages are separate observations. Drain both channels even
-        // if readiness arrived after this epoll batch, before deciding the run is complete.
+        if (out_ready)
+            stdout_->drain();
+        if (err_ready)
+            stderr_->drain();
         drain_channel(true);
         drain_channel(false);
-        auto now = monotonic_ms();
-        if (!stopping_ && !env_ready_ && now - started_ >= config_.limits.startup_ms)
-            request_stop("startup_timeout");
-        if (!stopping_ && exec_at_ && now - exec_at_ >= config_.limits.wall_ms)
-            request_stop("timeout");
-        report_.launcher_reaped = launcher_->poll_reaped();
-        if (report_.launcher_reaped && !init_reaped_) {
-            drain_channel(true);
+
+        const Millis now = now_ms();
+        if (launcher_->poll_reaped()) {
             if (!init_reaped_) {
-                report_.errors.push_back("launcher exited without confirmed init reap");
-                request_stop("host_error");
+                drain_channel(true);
+                if (!init_reaped_)
+                    apply(core_->supervisor_failed("launcher exited without confirmed init reap", now));
             }
+            core_->mark_launcher_reaped();
+            report_.launcher_reaped = true;
         }
-        const auto force_after = config_.limits.grace_ms + (cgroup_ ? 0 : 1000);
-        if (stopping_ && now - stop_at_ >= force_after && !forced_) {
-            forced_ = true;
-            if (cgroup_)
-                cgroup_->kill_all();
-            else
-                send_pidfd_signal(launcher_->init_pidfd(), SIGKILL);
+        observe_streams(now);
+        const bool children_gone = cgroup_ ? cgroup_->empty() : (init_done_ && init_reaped_);
+        if (children_gone && !children_seen_) {
+            children_seen_ = true;
+            apply(core_->descendants_empty(now));
         }
         sample_metrics(); // Cancel/deadline decisions above are independent of sampling cadence.
-        if (cgroup_)
-            report_.descendants_empty = cgroup_->empty();
-        else
-            report_.descendants_empty = init_done_ && init_reaped_;
-        if (report_.launcher_reaped && init_reaped_ && (init_done_ || !init_channel_open_) &&
-            report_.descendants_empty && stdout_->complete() && stderr_->complete())
+        apply(core_->tick(now));
+        if (core_->finished())
             break;
-        if (stopping_ && now - stop_at_ > config_.limits.grace_ms + 4000) {
-            report_.cleanup_errors.push_back("supervision completion deadline exceeded");
-            if (!report_.descendants_empty)
-                report_.cleanup_errors.push_back("descendants not confirmed empty before deadline");
-            if (!stdout_->complete() || !stderr_->complete())
-                report_.cleanup_errors.push_back("output EOF/writer completion deadline exceeded");
-            break;
-        }
     }
 }
+
 void RunSession::finalize() {
-    if (!stopping_)
-        request_stop("host_error");
     transition(RunState::finalizing);
+    const Millis now = now_ms();
+    if (core_ && !core_->finished()) {
+        report_.errors.push_back("supervision ended without a confirmed result");
+        apply(core_->supervisor_failed("supervision ended without a confirmed result", now));
+    }
     if (launcher_) {
         try {
             if (!launcher_->poll_reaped())
                 launcher_->abort();
             report_.launcher_reaped = launcher_->poll_reaped();
+            if (report_.launcher_reaped && core_)
+                core_->mark_launcher_reaped();
         } catch (const std::exception &e) {
             report_.cleanup_errors.push_back(e.what());
         }
@@ -318,8 +428,11 @@ void RunSession::finalize() {
             if (report_.descendants_empty) {
                 cgroup_->remove();
                 report_.cgroup_removed = true;
-            } else
+                if (core_)
+                    core_->mark_cgroup_removed();
+            } else {
                 report_.cleanup_errors.push_back("cgroup still populated");
+            }
         } catch (const std::exception &e) {
             report_.cleanup_errors.push_back(e.what());
         }
@@ -342,31 +455,46 @@ void RunSession::finalize() {
         auto path = store_->directory() / "rootfs";
         if (::rmdir(path.c_str()) < 0 && errno != ENOENT)
             report_.cleanup_errors.push_back("rootfs directory not empty or removal failed");
+        else if (core_)
+            core_->mark_workspace_removed();
     }
-    auto now = monotonic_ms();
-    report_.total_ms = now - started_;
-    if (exec_at_)
-        report_.execution_ms = now - exec_at_;
-    if (report_.stop_reason == "main_exited")
-        report_.stop_reason.clear();
     const auto memory_events = report_.metrics.value("memory.events.local", Json::object());
     const bool oom = memory_events.contains("oom_kill") &&
                      memory_events.at("oom_kill").is_number() &&
                      memory_events.at("oom_kill").get<std::uint64_t>() > 0;
-    if (oom && report_.stop_reason != "timeout" && report_.stop_reason != "cancelled")
-        report_.stop_reason = "oom";
-    else if (init_abnormal_ && report_.exec_error.empty() &&
-             (report_.stop_reason.empty() || report_.stop_reason == "init_channel_closed"))
+    if (oom && core_)
+        apply(core_->oom_observed(now));
+
+    // The report is an adapter over the execution result: it never re-derives
+    // lifecycle facts of its own.
+    const auto &result = core_->result();
+    report_.exit_code = result.outcome.exit_code();
+    report_.term_signal = result.outcome.term_signal();
+    report_.summary = summary_of(result.outcome);
+    report_.stop_reason = std::string(result.outcome.name());
+    report_.startup_ms =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.startup).count());
+    report_.execution_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<Millis>(result.timing.execution).count());
+    report_.total_ms =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.total).count());
+    report_.descendants_empty = report_.descendants_empty || result.cleanup.descendants_gone;
+    report_.cgroup_removed = report_.cgroup_removed || result.cleanup.cgroup_removed;
+    for (const auto &failure : result.cleanup.failures)
+        report_.cleanup_errors.push_back(std::string(cleanup_stage_name(failure.stage)) + ": " +
+                                        failure.detail);
+    if (init_abnormal_ && report_.exec_error.empty() && result.cleanup.complete() &&
+        report_.summary != "oom")
         report_.errors.push_back("init exited unexpectedly without a resource-limit explanation");
-    report_.conclude();
     if (store_)
         store_->report(report_);
     transition(RunState::finished);
     if (logger_) {
-        logger_->info("finished: {}", report_.summary);
+        logger_->info("finished: {} ({})", report_.summary, verdict_name(verdict_of(result)));
         logger_->flush();
     }
 }
+
 RunReport RunSession::run() {
     ensure_standard_fds();
     started_ = monotonic_ms();
@@ -379,6 +507,8 @@ RunReport RunSession::run() {
         report_.errors.push_back(e.what());
         if (logger_)
             logger_->error("run failed: {}", e.what());
+        if (core_ && !core_->finished())
+            apply(core_->supervisor_failed(e.what(), now_ms()));
     }
     if (state_.current() == RunState::created) {
         if (store_)
@@ -392,7 +522,6 @@ RunReport RunSession::run() {
         finalize();
     } catch (const std::exception &e) {
         report_.errors.push_back(std::string("finalize: ") + e.what());
-        report_.conclude();
         if (store_) {
             try {
                 store_->report(report_);

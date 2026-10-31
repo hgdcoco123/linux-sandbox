@@ -85,6 +85,21 @@ struct ExecutionResult {
 - 允许稀疏序列：process 后端没有 cgroup / id_map，序列里不出现这些步骤即可。
 - `describe()` 给出一行可读结论，直接进日志与报告。
 
+## 3.8 RunSession 已接入执行核心
+
+`src/runtime/run_session.cpp` 不再自己判断超时、宽限期、强杀时机与完成条件：
+
+- 事件：`ENV_READY` / `EXEC_OBSERVED` / `MAIN_EXIT` / `START_FAILED` / `INIT_ERROR` /
+  通道意外关闭 / 后代清空 / 输出 EOF 与落盘完成 / 每个事件循环迭代的 `tick`
+- 动作：`SignalTarget(SIGTERM)` → 向 init 发 `STOP`；`KillTarget` → `cgroup.kill_all()`
+  （无 cgroup 时退回 init pidfd）；`ForceDrain` → 停止接收新输出；`Completed` → 退出循环
+- 结束条件只剩一句 `if (core_->finished()) break;`
+
+`RunReport` 现在是**适配层**：`summary`、`exit_code`、`term_signal`、计时、清理失败全部从
+`ExecutionResult` 读出，`RunReport::conclude()` 不再参与判定。因此"目标退出 0 但清理失败"
+不会再被改写成 `host_error`——它显示为 `success` + `cleanup_errors`，并可用
+`verdict_of()` 得到 `cleanup_incomplete`。
+
 ## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
 - 停止流程只有一条：记录原因 → 停止受理输入 → 请求退出 → 宽限期 → 强制终止 → 确认集合为空 → 收尾输出 → 落盘。取消与超时只是入口不同。
@@ -98,7 +113,8 @@ struct ExecutionResult {
 | P1 | 核心类型、结果三分、记录边界 + 可移植测试 | `[完成]` |
 | P2 | 类型化会话请求/响应 + 二进制控制报文（`core/ops.hpp`、`core/wire.hpp`） | `[完成]` 模型与编解码；控制器接线在 P3 |
 | P3 | 统一执行核心 `core/supervisor`（事件→动作，纯逻辑） | `[完成]` 核心与测试；两个控制器的接线在 P3.5 |
-| P3.5 | `RunSession`/`SessionController` 接入执行核心 | `[待做]` |
+| P3.5 | `RunSession` 接入执行核心（单次执行） | `[完成]` |
+| P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
 | P6 | 控制通道消息类型化，FD 契约按消息类型声明 | `[待做]` |
