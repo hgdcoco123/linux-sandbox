@@ -75,6 +75,13 @@ foreach ($name in $suites.Keys) {
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL run $name" -ForegroundColor Red; $failures++ }
 }
 
+# 1.4 Shipped profiles must still parse under the current config schema.
+Step 'profiles'
+$modelExe = Join-Path $Build 'model-tests.exe'
+if (Test-Path $modelExe) {
+    & $modelExe (Join-Path $root 'profiles')
+    if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL profile schema check' -ForegroundColor Red; $failures++ }
+}
 # 1.5 CMakeLists must list exactly the sources that exist. This script compiles
 # the tree directly, so without this check a file missing from CMake would build
 # here and fail on a real Linux CMake build.

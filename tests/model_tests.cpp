@@ -1,5 +1,7 @@
 #include "sandbox/config.hpp"
 #include "sandbox/report.hpp"
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 using namespace sandbox;
@@ -16,7 +18,44 @@ template <class F> void rejects(F f) {
     }
     require(threw, "expected rejection");
 }
-int main() {
+// Shipped profiles are user-facing fixtures: a config schema change that breaks
+// one of them must fail the build, not the user's first run.
+int validate_profiles(const fs::path &directory) {
+    int failures = 0;
+    for (const auto &entry : fs::directory_iterator(directory)) {
+        if (entry.path().extension() != ".json")
+            continue;
+        Json document;
+        {
+            std::ifstream in(entry.path());
+            in >> document;
+        }
+        if (document.contains("tasks"))
+            continue; // batch manifest, not a single run config
+        try {
+            // Schema only: the profiles point at host paths that exist on the
+            // deployment machine, not here, so validate() would report missing
+            // directories rather than config drift.
+            auto config = RunConfig::load(entry.path());
+            (void)config;
+        } catch (const std::exception &error) {
+            std::printf("FAIL profile %s: %s\n", entry.path().filename().string().c_str(),
+                        error.what());
+            ++failures;
+        }
+    }
+    return failures;
+}
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        int profile_failures = validate_profiles(argv[1]);
+        if (profile_failures != 0) {
+            std::printf("%d profile(s) failed to load\n", profile_failures);
+            return 1;
+        }
+        std::printf("profiles loaded: %s\n", argv[1]);
+        return 0;
+    }
     try {
         Json j = {{"schema_version", 1},
                   {"argv", {"/bin/true"}},
