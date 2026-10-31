@@ -54,6 +54,24 @@ struct ExecutionResult {
 - 对外 SDK 通道（`proto/session_v1.proto`）仍是 protobuf，两条通道互不影响。
 - 若要求内部也用 protobuf，替换点只有 `src/core/wire.cpp` 一个文件。
 
+## 3.6 执行核心：事件进、动作出
+
+`core/supervisor.hpp` 把单次执行与会话共用的监督逻辑抽成一个**不碰内核的确定性状态机**：
+
+- 输入是事实：`env_ready`、`main_exited(code|signal)`、`descendants_empty`、`output_eof`、
+  `output_finished(stats)`、`oom_observed`、`tick(now)`
+- 输出是决策：`SignalTarget(SIGTERM)`、`KillTarget()`、`ForceDrain()`、`Completed()`
+- 时间由调用方传入，所以测试不 sleep、不需要内核、不需要 root
+
+三条规则被固化在这里，两个控制器不可能各写一套：
+
+1. **事实优先于意图**：先退出 0 再收到 cancel，结果仍是 `Exited(0)`；cancel 之后才被 KILL，
+   结果按 `TimedOut`/`Cancelled` 报，不会把自杀信号当成目标的信号。
+2. **完成需要三个独立事实**：结局已定、后代清空、两条输出都已落盘。缺一个就不算完成；
+   到 deadline 仍缺，就完成并把缺口写进 `cleanup.failures`（退出码不变）。
+3. **准备阶段失败是立即完成**：什么都没启动，就没有输出可等、没有后代可收，
+   `StartupFailed` 会明确写下这一点，而不是让调用方等一个永远不会到来的 EOF。
+
 ## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
 - 停止流程只有一条：记录原因 → 停止受理输入 → 请求退出 → 宽限期 → 强制终止 → 确认集合为空 → 收尾输出 → 落盘。取消与超时只是入口不同。
@@ -66,7 +84,8 @@ struct ExecutionResult {
 |---|---|---|
 | P1 | 核心类型、结果三分、记录边界 + 可移植测试 | `[完成]` |
 | P2 | 类型化会话请求/响应 + 二进制控制报文（`core/ops.hpp`、`core/wire.hpp`） | `[完成]` 模型与编解码；控制器接线在 P3 |
-| P3 | 统一 `Execution` 核心，`RunController`/`SessionController` 退化为外壳 | `[待做]` |
+| P3 | 统一执行核心 `core/supervisor`（事件→动作，纯逻辑） | `[完成]` 核心与测试；两个控制器的接线在 P3.5 |
+| P3.5 | `RunSession`/`SessionController` 接入执行核心 | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚，产出 `CleanupResult` | `[待做]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
 | P6 | 控制通道消息类型化，FD 契约按消息类型声明 | `[待做]` |

@@ -8,7 +8,8 @@ add_library(sandbox_dependencies INTERFACE)
 target_include_directories(sandbox_dependencies INTERFACE third_party third_party/spdlog/include)
 # Redesigned core: typed business model; no JSON in the business types.
 add_library(sandbox_core src/core/ids.cpp src/core/outcome.cpp src/core/result.cpp
-  src/core/request.cpp src/core/ops.cpp src/core/wire.cpp src/core/record_json.cpp)
+  src/core/request.cpp src/core/ops.cpp src/core/wire.cpp src/core/supervisor.cpp
+  src/core/record_json.cpp)
 target_include_directories(sandbox_core PUBLIC include)
 target_link_libraries(sandbox_core PUBLIC sandbox_dependencies)
 add_executable(core_tests tests/core_tests.cpp)
@@ -17,6 +18,14 @@ add_test(NAME core COMMAND core_tests)
 add_executable(wire_tests tests/wire_tests.cpp)
 target_link_libraries(wire_tests PRIVATE sandbox_core)
 add_test(NAME wire COMMAND wire_tests)
+add_executable(supervisor_tests tests/supervisor_tests.cpp)
+target_link_libraries(supervisor_tests PRIVATE sandbox_core)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  # GCC 15 reports a false positive inside libstdc++ variant/string copies that
+  # this test instantiates; the library itself builds warning-free.
+  target_compile_options(supervisor_tests PRIVATE -Wno-maybe-uninitialized)
+endif()
+add_test(NAME supervisor COMMAND supervisor_tests)
 add_library(sandbox_model src/model/config.cpp src/model/report.cpp src/model/command_model.cpp src/model/task.cpp)
 target_include_directories(sandbox_model PUBLIC include)
 target_link_libraries(sandbox_model PUBLIC sandbox_dependencies)

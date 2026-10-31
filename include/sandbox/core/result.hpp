@@ -47,6 +47,7 @@ enum class CleanupStage {
     init,
     cgroup,
     mounts,
+    outputs,
     workspace,
     control_socket,
 };

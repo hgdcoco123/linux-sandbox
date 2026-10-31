@@ -14,6 +14,8 @@ const char *cleanup_stage_name(CleanupStage stage) noexcept {
         return "cgroup";
     case CleanupStage::mounts:
         return "mounts";
+    case CleanupStage::outputs:
+        return "outputs";
     case CleanupStage::workspace:
         return "workspace";
     case CleanupStage::control_socket:
