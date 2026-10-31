@@ -32,6 +32,11 @@ if [ -d "$root/.git" ]; then
 else
     log "commit: (not a git checkout - copy the repository for reproducible results)"
 fi
+if command -v sha256sum >/dev/null 2>&1; then
+    stamp=$(cat CMakeLists.txt src/core/ops_json.cpp src/runtime/run_session.cpp 2>/dev/null |
+        sha256sum | cut -c1-12)
+    log "source stamp: $stamp"
+fi
 {
     uname -a
     cat /etc/os-release
