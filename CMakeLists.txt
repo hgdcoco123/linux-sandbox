@@ -9,7 +9,7 @@ target_include_directories(sandbox_dependencies INTERFACE third_party third_part
 # Redesigned core: typed business model; no JSON in the business types.
 add_library(sandbox_core src/core/ids.cpp src/core/outcome.cpp src/core/result.cpp
   src/core/request.cpp src/core/ops.cpp src/core/wire.cpp src/core/supervisor.cpp
-  src/core/prepare.cpp src/core/control.cpp src/core/record_json.cpp)
+  src/core/prepare.cpp src/core/control.cpp src/core/workspace.cpp src/core/record_json.cpp)
 target_include_directories(sandbox_core PUBLIC include)
 target_link_libraries(sandbox_core PUBLIC sandbox_dependencies)
 add_executable(core_tests tests/core_tests.cpp)
@@ -38,6 +38,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(fault_tests PRIVATE -Wno-maybe-uninitialized)
 endif()
 add_test(NAME fault COMMAND fault_tests)
+add_executable(workspace_tests tests/workspace_tests.cpp)
+target_link_libraries(workspace_tests PRIVATE sandbox_core)
+add_test(NAME workspace COMMAND workspace_tests)
 add_library(sandbox_model src/model/config.cpp src/model/report.cpp src/model/command_model.cpp src/model/task.cpp)
 target_include_directories(sandbox_model PUBLIC include)
 target_link_libraries(sandbox_model PUBLIC sandbox_dependencies)

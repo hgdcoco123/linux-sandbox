@@ -45,9 +45,14 @@ seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-s
 `batch.cpp` 仍用 `posix_spawn` 起独立 sandbox 进程并按 JSON 汇总状态。接入点是让每个
 任务复用 `ExecutionCore` 的结果类型，批次摘要直接来自 `ExecutionResult`。
 
-### 其它
+### workspace 边界接线
 
-- workspace/runtime 边界落成配置项（配额、保留策略、快照语义）尚未做。
+`core/workspace` 已给出策略类型与 `admit()` 决策函数（预算、结构拒绝、优先级、溢出安全），
+并有 `workspace_tests` 覆盖。**尚未接线**：
+
+- `RunConfig` 增加 `workspace` 段并解析成 `WorkspacePolicy`（未知字段拒绝、越界拒绝）
+- `src/storage/artifacts.cpp` 的复制循环改用 `admit()`，替换写死的 4096 项 / 256MiB
+- 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败进 `CleanupResult`
 - `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化。
 - 会话路径的 `sessions.py` 等集成测试未更新，当前仓库状态下这些用例不可用。
 
