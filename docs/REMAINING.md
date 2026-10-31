@@ -20,6 +20,14 @@
 
 ### P3.6 会话路径类型化（最大一块）
 
+**已完成的第一步**：`core/ops_json` 提供 `session_request_from_json()`，把客户端 JSON 请求
+转成类型化 `SessionRequest`，带闭合字段集（未知字段拒绝）与逐字段类型检查；9 种操作 +
+3 种 workspace 子操作全部覆盖，`ops_json_tests` 有 30 余条接受/拒绝断言。
+下一步是把 `interactive_session::handle(const Json&)` 换成 `handle(const SessionRequest&)`,
+这一步才需要动 `SessionStore` 与旧 `ExecuteRequest`。
+
+原始范围：
+
 `interactive_session.cpp` 仍以 `Json` 为业务对象。要完成它必须同时替换旧模型，因为
 `resolve_command`、`SessionStore::replay`、`CommandRecord` 都绑定在
 `ExecuteRequest`/`CommandId` 上：

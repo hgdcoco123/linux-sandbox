@@ -53,6 +53,7 @@ $suites = [ordered]@{
     prepare    = 'tests/prepare_tests.cpp'
     control    = 'tests/control_tests.cpp'
     workspace  = 'tests/workspace_tests.cpp'
+    ops_json   = 'tests/ops_json_tests.cpp'
     fault      = 'tests/fault_tests.cpp'
     model      = 'tests/model_tests.cpp'
 }
@@ -62,7 +63,7 @@ foreach ($name in $suites.Keys) {
           'src/model/task.cpp', 'src/core/workspace.cpp') |
             ForEach-Object { Join-Path $root $_ }
     }
-    elseif ($name -in 'wire', 'control', 'workspace') {
+    elseif ($name -in 'wire', 'control', 'workspace', 'ops_json') {
         $core | Where-Object { $_ -notmatch 'supervisor' }
     }
     else { $core }
