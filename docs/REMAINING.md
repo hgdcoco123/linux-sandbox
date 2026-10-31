@@ -63,7 +63,17 @@ seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-s
 - `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化。
 - 会话路径的 `sessions.py` 等集成测试未更新，当前仓库状态下这些用例不可用。
 
-## 真实性声明
+'## 本机可复现的验证
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/cross-verify.ps1 `
+    -Zig <zig.exe> -HostWork <含 sysroot 与 protobuf 预编译对象的目录>
+```
+
+三段：可移植测试 → 41 个 Linux 翻译单元交叉编译 → 链接 `sandbox` 与 `sandbox-launcher`。
+第三步是关键：逐文件编译通过仍可能留下未定义或重复符号，链接才证明整棵树自洽。
+
+## 真实性声明'
 
 交叉编译只能证明类型与接口正确。死锁、竞态、信号时序、cgroup 行为、seccomp 策略
 都必须在 Ubuntu 上以真实内核验证。任何"完成"结论都不应基于本仓库当前的本机验证。
