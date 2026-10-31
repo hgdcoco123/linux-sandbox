@@ -2,14 +2,18 @@
 #include <cerrno>
 #include <cstring>
 #include <sys/socket.h>
+#include <vector>
 namespace sandbox {
-void ControlChannel::send(const std::string &kind, const Json &payload, int pass_fd) {
-    if (!payload.is_object())
-        throw std::runtime_error("control payload must be an object");
-    auto text =
-        Json{{"version", 1}, {"sequence", tx_}, {"kind", kind}, {"payload", payload}}.dump();
-    if (text.size() > 16384)
-        throw std::runtime_error("control message exceeds 16KiB");
+void ControlChannel::send(const ControlMessage &message, int pass_fd) {
+    const auto kind = kind_of(message);
+    const auto contract = fd_contract(kind);
+    if (contract.required == 0 && pass_fd >= 0)
+        throw ControlError("FD_CONTRACT",
+                           std::string(control_kind_name(kind)) + " does not carry a descriptor");
+    if (contract.required == 1 && pass_fd < 0)
+        throw ControlError("FD_CONTRACT",
+                           std::string(control_kind_name(kind)) + " requires a descriptor");
+    auto text = encode(message);
     iovec io{const_cast<char *>(text.data()), text.size()};
     msghdr msg{};
     msg.msg_iov = &io;
@@ -31,11 +35,10 @@ void ControlChannel::send(const std::string &kind, const Json &payload, int pass
     if (n < 0)
         system_error("sendmsg");
     if (static_cast<std::size_t>(n) != text.size())
-        throw std::runtime_error("short control message");
-    ++tx_;
+        throw ControlError("SHORT_WRITE", "short control message");
 }
-std::optional<Message> ControlChannel::receive(bool nb) {
-    char data[16385];
+std::optional<ControlEnvelope> ControlChannel::receive(bool nonblock) {
+    char data[max_control_packet + 1];
     alignas(cmsghdr) char ancillary[CMSG_SPACE(sizeof(int) * 4)]{};
     iovec io{data, sizeof(data)};
     msghdr msg{};
@@ -45,7 +48,7 @@ std::optional<Message> ControlChannel::receive(bool nb) {
     msg.msg_controllen = sizeof(ancillary);
     ssize_t n;
     do {
-        n = ::recvmsg(fd_.get(), &msg, MSG_CMSG_CLOEXEC | (nb ? MSG_DONTWAIT : 0));
+        n = ::recvmsg(fd_.get(), &msg, MSG_CMSG_CLOEXEC | (nonblock ? MSG_DONTWAIT : 0));
     } while (n < 0 && errno == EINTR);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
         return std::nullopt;
@@ -53,6 +56,8 @@ std::optional<Message> ControlChannel::receive(bool nb) {
         system_error("recvmsg");
     if (n == 0)
         throw ChannelClosed{};
+    // Each descriptor is owned by a UniqueFd as soon as it is extracted, so a
+    // message rejected for a contract violation cannot leak one.
     std::vector<UniqueFd> received;
     for (auto *c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c))
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
@@ -61,25 +66,13 @@ std::optional<Message> ControlChannel::receive(bool nb) {
             for (std::size_t i = 0; i < count; ++i)
                 received.emplace_back(f[i]);
         }
-    if ((msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) || n > 16384 || received.size() > 1)
-        throw std::runtime_error("invalid bounded control message");
-    auto j = Json::parse(data, data + n);
-    require_keys(j, {"version", "sequence", "kind", "payload"}, "control message");
-    if (j.at("version") != 1 || j.at("sequence").get<std::uint64_t>() != rx_)
-        throw std::runtime_error("control version/sequence mismatch");
-    if (!j.at("kind").is_string() || !j.at("payload").is_object())
-        throw std::runtime_error("invalid control types");
-    // Only descriptor-bearing message kinds are permitted to carry an FD.
-    // Keep every received FD owned by UniqueFd until validation succeeds.
-    const auto kind = j.at("kind").get<std::string>();
-    const bool needs_fd = kind == "INIT_CREATED" || kind == "STDIN" || kind == "STDOUT" ||
-                          kind == "STDERR";
-    if (needs_fd != (received.size() == 1))
-        throw std::runtime_error("control message descriptor does not match kind");
-    ++rx_;
-    Message result{std::move(j), UniqueFd{}};
+    if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC))
+        throw ControlError("BAD_PACKET", "truncated control message or descriptor array");
+    auto message = decode(std::string_view(data, static_cast<std::size_t>(n)));
+    validate_fd_count(kind_of(message), received.size());
+    ControlEnvelope envelope{std::move(message), UniqueFd{}};
     if (!received.empty())
-        result.fd = std::move(received[0]);
-    return result;
+        envelope.fd = std::move(received.front());
+    return envelope;
 }
 } // namespace sandbox

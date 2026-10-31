@@ -45,7 +45,19 @@ enum class ControlKind : std::uint8_t {
     main_exit = 15,
     init_done = 16,
     init_error = 17,
+    command_done = 18,
 };
+
+// Why a session command ended, as reported by the pid-1 process.
+enum class CommandStop : std::uint8_t {
+    main_exit = 0,
+    cancelled = 1,
+    timeout = 2,
+    session_closed = 3,
+    startup_failure = 4,
+    supervision_failure = 5,
+};
+const char *command_stop_name(CommandStop) noexcept;
 
 const char *control_kind_name(ControlKind) noexcept;
 
@@ -102,10 +114,21 @@ struct InitDone {};
 struct InitError {
     std::string message;
 };
+// Facts about one finished session command. The stop reason is a fact, not a
+// decision: the controller still decides the outcome.
+struct CommandDone {
+    CommandIndex command;
+    std::optional<int> exit_code;
+    std::optional<int> signal;
+    std::optional<int> exec_errno;
+    CommandStop stop = CommandStop::main_exit;
+    std::chrono::milliseconds elapsed{0};
+};
 
 using ControlMessage = std::variant<InitCreated, InitReaped, BootstrapError, Prepare, Exec, Stop,
                                     Cancel, StdinHandle, StdoutHandle, StderrHandle, Command, EnvReady,
-                                    ExecObserved, StartFailed, MainExit, InitDone, InitError>;
+                                    ExecObserved, StartFailed, MainExit, InitDone, InitError,
+                                    CommandDone>;
 
 [[nodiscard]] ControlKind kind_of(const ControlMessage &) noexcept;
 

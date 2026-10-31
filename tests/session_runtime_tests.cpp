@@ -15,20 +15,24 @@ int main() {
         auto pair = SocketPair::create();
         ControlChannel sender(std::move(pair.first)), receiver(std::move(pair.second));
         auto null = open_path("/dev/null", O_RDWR);
-        for (auto kind : {"STDIN", "STDOUT", "STDERR"}) {
-            sender.send(kind, Json::object(), null.get());
+        for (const auto &message : {ControlMessage{StdinHandle{*CommandIndex::from_number(1)}},
+                                    ControlMessage{StdoutHandle{*CommandIndex::from_number(1)}},
+                                    ControlMessage{StderrHandle{*CommandIndex::from_number(1)}}}) {
+            sender.send(message, null.get());
             auto received = receiver.receive();
-            require(received && received->fd && received->body.at("payload").is_object());
+            require(received && received->fd);
         }
+        // A body-only message must not carry a descriptor: rejected at the sender.
         bool rejected = false;
         try {
-            sender.send("STDIN", Json(nullptr), null.get());
+            sender.send(EnvReady{}, null.get());
         } catch (...) {
             rejected = true;
         }
         require(rejected);
-        sender.send("NEXT");
-        require(receiver.receive()->body.at("kind") == "NEXT");
+        sender.send(EnvReady{});
+        auto next = receiver.receive();
+        require(next && std::holds_alternative<EnvReady>(next->message));
         char pattern[] = "/tmp/sbx-prepare-XXXXXX";
         auto temp = ::mkdtemp(pattern);
         if (!temp)

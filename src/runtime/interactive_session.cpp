@@ -18,6 +18,25 @@
 #include <unistd.h>
 namespace sandbox {
 namespace {
+StopReason stop_reason_of(CommandStop stop) {
+    switch (stop) {
+    case CommandStop::main_exit:
+        return StopReason::exited;
+    case CommandStop::cancelled:
+        return StopReason::cancelled;
+    case CommandStop::timeout:
+        return StopReason::timed_out;
+    case CommandStop::session_closed:
+        return StopReason::session_closed;
+    case CommandStop::startup_failure:
+        return StopReason::startup_failed;
+    case CommandStop::supervision_failure:
+        return StopReason::supervision_failed;
+    }
+    return StopReason::supervision_failed;
+}
+} // namespace
+namespace {
 bool overlap(const fs::path &a, const fs::path &b) {
     auto x = a.begin(), y = b.begin();
     while (x != a.end() && y != b.end() && *x == *y) {
@@ -100,7 +119,7 @@ class SessionController {
         if (execution_)
             execution_->input.write.reset();
         if (launcher_ && init_open_)
-            launcher_->init_channel().send("STOP");
+            launcher_->init_channel().send(Stop{});
         persist();
     }
     Json start(const ExecuteRequest &request) {
@@ -118,6 +137,7 @@ class SessionController {
             throw SessionError("INVALID_REQUEST", e.what());
         }
         auto id = "cmd-" + std::to_string(++counter_);
+        const auto index = *CommandIndex::parse(id);
         auto dir = store_->directory() / id;
         checked(::mkdir(dir.c_str(), 0700), "create command directory");
         auto prepared = std::make_unique<CommandExecution>(dir, config_.limits.capture_bytes);
@@ -125,7 +145,7 @@ class SessionController {
         sample_metrics(started, true);
         auto baseline = metrics_report();
         prepared->record.emplace(CommandId::parse(id), request, command);
-        Json dispatch = {{"command_id", id}, {"config", command.to_json()}};
+        const std::string dispatch = command.to_json().dump();
         prepared->baseline = std::move(baseline);
         prepared->started = started;
         prepared->wall_ms = command.limits.wall_ms;
@@ -135,10 +155,10 @@ class SessionController {
         lifecycle_.transition(SessionState::running);
         auto &channel = launcher_->init_channel();
         try {
-            channel.send("STDIN", Json::object(), execution_->input.read.get());
-            channel.send("STDOUT", Json::object(), execution_->output.write.get());
-            channel.send("STDERR", Json::object(), execution_->error.write.get());
-            channel.send("COMMAND", dispatch);
+            channel.send(StdinHandle{index}, execution_->input.read.get());
+            channel.send(StdoutHandle{index}, execution_->output.write.get());
+            channel.send(StderrHandle{index}, execution_->error.write.get());
+            channel.send(Command{index, dispatch});
             execution_->release_child_ends();
             persist();
         } catch (...) {
@@ -190,7 +210,7 @@ class SessionController {
         if (op == "cancel") {
             if (!current().is_null() && !lifecycle_.stopping()) {
                 lifecycle_.require_running();
-                launcher_->init_channel().send("CANCEL");
+                launcher_->init_channel().send(Cancel{});
                 if (execution_)
                     execution_->input.write.reset();
             }
@@ -243,13 +263,11 @@ class SessionController {
         }
         throw std::runtime_error("unknown session operation");
     }
-    void event(Message m, bool parent) {
-        auto kind = m.body.at("kind").get<std::string>();
-        auto payload = m.body.at("payload");
+    void event(ControlEnvelope envelope, bool parent) {
         if (parent) {
-            if (kind == "INIT_CREATED") {
-                auto pid = payload.at("pid").get<pid_t>();
-                launcher_->set_init_identity(pid, std::move(m.fd));
+            if (auto *created = std::get_if<InitCreated>(&envelope.message)) {
+                auto pid = created->pid;
+                launcher_->set_init_identity(pid, std::move(envelope.fd));
                 store_->owner_update({{"init_pid", pid}, {"init_start", process_start(pid)}});
                 if (group_) {
                     auto proc = fs::path("/proc") / std::to_string(pid);
@@ -259,25 +277,28 @@ class SessionController {
                     group_->attach(pid);
                     sample_metrics(monotonic_ms(), true);
                 }
-                launcher_->init_channel().send(lifecycle_.stopping() ? "STOP" : "PREPARE");
-            } else if (kind == "INIT_REAPED") {
+                launcher_->init_channel().send(lifecycle_.stopping() ? ControlMessage{Stop{}}
+                                                                  : ControlMessage{Prepare{}});
+            } else if (auto *reaped = std::get_if<InitReaped>(&envelope.message)) {
                 reaped_ = true;
-                int status = payload.at("wait_status").get<int>();
+                int status = reaped->wait_status;
                 if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
                     throw std::runtime_error("session init exited abnormally");
             } else
-                throw std::runtime_error("launcher failed: " + payload.dump());
+                throw std::runtime_error("launcher failed: unexpected message");
         } else {
-            if (kind == "ENV_READY") {
+            if (std::holds_alternative<EnvReady>(envelope.message)) {
                 if (!lifecycle_.stopping())
                     lifecycle_.transition(SessionState::idle);
                 idle_ = monotonic_ms();
                 store_->state(RunState::running);
                 persist();
-            } else if (kind == "COMMAND_DONE") {
+            } else if (auto *done = std::get_if<CommandDone>(&envelope.message)) {
                 if (!execution_ || !execution_->record)
                     throw std::runtime_error("command result mismatch");
-                auto facts = CommandFacts::parse(payload);
+                auto facts = CommandFacts{CommandId::parse(done->command.str()), done->exit_code,
+                                          done->signal, done->exec_errno,
+                                          stop_reason_of(done->stop), done->elapsed};
                 if (facts.id != execution_->record->id)
                     throw std::runtime_error("command result mismatch");
                 execution_->record->apply(std::move(facts));
@@ -286,10 +307,10 @@ class SessionController {
                 execution_->done = true;
                 if (execution_)
                     execution_->input.write.reset();
-            } else if (kind == "INIT_DONE")
+            } else if (std::holds_alternative<InitDone>(envelope.message))
                 done_ = true;
             else
-                throw std::runtime_error("init failed: " + payload.dump());
+                throw std::runtime_error("init failed: unexpected message");
         }
     }
 

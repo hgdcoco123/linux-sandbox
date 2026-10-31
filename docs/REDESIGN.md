@@ -116,6 +116,11 @@ struct ExecutionResult {
 - `command` 携带的是执行配置的**不透明 blob**——配置是边界，控制层不解释它。
 - 帧格式 `CTL1 + kind + varint 长度`，与会话通道共用 `core/binary.hpp` 的编解码原语，
   不再各写一份读写器。
+- **契约两端都强制**：发送端拒绝"给 body-only 消息附带描述符""该带描述符却没带"；
+  接收端在解包之后用 `validate_fd_count()` 再核对一次，多余描述符在抛错前已被 `UniqueFd` 接管，
+  不会泄漏。
+- launcher、init、persistent init、单次执行、连续会话五处全部改用类型化消息，
+  `Message{Json body}` 这个结构已经不存在。
 
 ## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
@@ -134,7 +139,8 @@ struct ExecutionResult {
 | P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
-| P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` 模型与契约；通道接线在 P6.5 |
+| P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` |
+| P6.5 | `protocol.cpp`/launcher/init/会话/runsession 全部改用 `ControlMessage` | `[完成]` 控制通道已无 JSON |
 | P7 | 批次调度改用同一执行核心 | `[待做]` |
 | P8 | 故障注入测试（步骤失败、FD 缺失/多余、写盘失败、恢复中断） | `[待做]` |
 

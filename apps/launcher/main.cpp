@@ -1,4 +1,4 @@
-#include "sandbox/environment.hpp"
+﻿#include "sandbox/environment.hpp"
 #include "sandbox/isolation.hpp"
 #include "sandbox/protocol.hpp"
 #include <cerrno>
@@ -71,13 +71,13 @@ int main(int argc, char **argv) {
             init_ref = UniqueFd(4);
         }
         close_from(6);
-        parent.send("INIT_CREATED", {{"pid", init_pid}}, init_ref.get());
+        parent.send(InitCreated{init_pid}, init_ref.get());
         for (;;) {
             int status;
             auto n = ::waitpid(init_pid, &status, WNOHANG);
             if (n == init_pid) {
                 waited = true;
-                parent.send("INIT_REAPED", {{"wait_status", status}});
+                parent.send(InitReaped{status});
                 return 0;
             }
             if (n < 0 && errno != EINTR)
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
         }
     } catch (const std::exception &e) {
         try {
-            parent.send("BOOTSTRAP_ERROR", {{"error", e.what()}});
+            parent.send(BootstrapError{e.what()});
         } catch (...) {
         }
         if (init_pid > 0 && !waited) {

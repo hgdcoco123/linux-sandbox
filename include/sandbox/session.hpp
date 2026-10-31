@@ -19,8 +19,8 @@ class RunSession {
   private:
     void prepare();
     void supervise(SignalSource &);
-    void on_launcher(Message);
-    void on_init(Message);
+    void on_launcher(ControlEnvelope);
+    void on_init(ControlEnvelope);
     void apply(const std::vector<SupervisionAction> &);
     void observe_streams(Millis now);
     void request_cancel();

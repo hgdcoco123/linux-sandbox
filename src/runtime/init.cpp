@@ -48,13 +48,15 @@ void children_signal(int signal, bool isolated) {
         if (::kill(pid, signal) < 0 && errno != ESRCH)
             system_error("signal adopted child");
 }
-Message expect(ControlChannel &channel, const char *kind) {
-    auto m = channel.receive();
-    if (m && m->body.at("kind") == "STOP")
+ControlEnvelope expect(ControlChannel &channel, ControlKind kind) {
+    auto envelope = channel.receive();
+    if (!envelope)
+        throw std::runtime_error("control channel closed during preparation");
+    if (std::holds_alternative<Stop>(envelope->message))
         throw StartupCancelled{};
-    if (!m || m->body.at("kind") != kind)
-        throw std::runtime_error("expected " + std::string(kind));
-    return std::move(*m);
+    if (sandbox::kind_of(envelope->message) != kind)
+        throw std::runtime_error(std::string("expected ") + control_kind_name(kind));
+    return std::move(*envelope);
 }
 } // namespace
 int persistent_init(const RunConfig &, const fs::path &);
@@ -69,7 +71,7 @@ int init_main(const RunConfig &config, const fs::path &root) {
         checked(::prctl(PR_SET_PDEATHSIG, SIGKILL), "init parent death");
         if (!isolated)
             checked(::prctl(PR_SET_CHILD_SUBREAPER, 1), "init subreaper");
-        expect(control, "PREPARE");
+        expect(control, ControlKind::prepare);
         if (isolated)
             RootfsBuilder::build(config, root);
         else
@@ -84,8 +86,8 @@ int init_main(const RunConfig &config, const fs::path &root) {
         checked(::sigprocmask(SIG_BLOCK, &mask, nullptr), "block init SIGCHLD");
         UniqueFd signals(
             checked(::signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK), "init signalfd"));
-        control.send("ENV_READY");
-        expect(control, "EXEC");
+        control.send(EnvReady{});
+        expect(control, ControlKind::exec);
         auto execpipe = Pipe::create();
         std::vector<char *> argv;
         for (const auto &s : config.argv)
@@ -140,9 +142,9 @@ int init_main(const RunConfig &config, const fs::path &root) {
             }
             children_signal(SIGTERM, isolated);
         };
-        auto notify = [&](const char *type, const Json &payload = Json::object()) {
+        auto notify = [&](const ControlMessage &message) {
             if (control_alive)
-                control.send(type, payload);
+                control.send(message);
         };
         for (;;) {
             pollfd fds[3]{{control.fd(), POLLIN | POLLHUP, 0},
@@ -156,7 +158,7 @@ int init_main(const RunConfig &config, const fs::path &root) {
                 try {
                     auto message = control.receive(true);
                     if (message) {
-                        if (message->body.at("kind") != "STOP")
+                        if (!std::holds_alternative<Stop>(message->message))
                             throw std::runtime_error("invalid init command");
                         stop();
                     }
@@ -178,7 +180,7 @@ int init_main(const RunConfig &config, const fs::path &root) {
                         std::memcpy(&e, bytes.data(), sizeof(e));
                         exec_failed = true;
                         exec_known = true;
-                        notify("START_FAILED", {{"stage", e.stage}, {"errno", e.error}});
+                        notify(StartFailed{e.stage, e.error});
                         execpipe.read.reset();
                         break;
                     }
@@ -198,7 +200,7 @@ int init_main(const RunConfig &config, const fs::path &root) {
                     execpipe.read.reset();
                     if (size)
                         throw std::runtime_error("partial exec failure");
-                    notify("EXEC_OBSERVED");
+                    notify(ExecObserved{});
                 }
             }
             bool empty = false;
@@ -208,12 +210,12 @@ int init_main(const RunConfig &config, const fs::path &root) {
                 if (child > 0) {
                     if (child == main_pid) {
                         main_reaped = true;
-                        Json exit = {{"exit_code", nullptr}, {"signal", nullptr}};
+                        MainExit exit;
                         if (WIFEXITED(status))
-                            exit["exit_code"] = WEXITSTATUS(status);
+                            exit.exit_code = WEXITSTATUS(status);
                         if (WIFSIGNALED(status))
-                            exit["signal"] = WTERMSIG(status);
-                        notify("MAIN_EXIT", exit);
+                            exit.signal = WTERMSIG(status);
+                        notify(exit);
                         stop();
                     }
                     continue;
@@ -233,19 +235,19 @@ int init_main(const RunConfig &config, const fs::path &root) {
                                 isolated);
             }
             if (main_reaped && empty && exec_known) {
-                notify("INIT_DONE");
+                notify(InitDone{});
                 return 0;
             }
         }
     } catch (const StartupCancelled &) {
         try {
-            control.send("INIT_DONE");
+            control.send(InitDone{});
         } catch (...) {
         }
         return 0;
     } catch (const std::exception &e) {
         try {
-            control.send("INIT_ERROR", {{"error", e.what()}});
+            control.send(InitError{e.what()});
         } catch (...) {
         }
         if (main_pid > 0 && !main_reaped) {

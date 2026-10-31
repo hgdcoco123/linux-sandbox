@@ -1,4 +1,4 @@
-#include "sandbox/core/control.hpp"
+﻿#include "sandbox/core/control.hpp"
 
 #include "sandbox/core/binary.hpp"
 
@@ -52,6 +52,26 @@ const char *control_kind_name(ControlKind kind) noexcept {
         return "init_done";
     case ControlKind::init_error:
         return "init_error";
+    case ControlKind::command_done:
+        return "command_done";
+    }
+    return "unknown";
+}
+
+const char *command_stop_name(CommandStop stop) noexcept {
+    switch (stop) {
+    case CommandStop::main_exit:
+        return "main_exited";
+    case CommandStop::cancelled:
+        return "cancelled";
+    case CommandStop::timeout:
+        return "timeout";
+    case CommandStop::session_closed:
+        return "session_closed";
+    case CommandStop::startup_failure:
+        return "startup_failure";
+    case CommandStop::supervision_failure:
+        return "host_error";
     }
     return "unknown";
 }
@@ -116,6 +136,8 @@ ControlKind kind_of(const ControlMessage &message) noexcept {
                 return ControlKind::main_exit;
             else if constexpr (std::is_same_v<T, InitDone>)
                 return ControlKind::init_done;
+            else if constexpr (std::is_same_v<T, CommandDone>)
+                return ControlKind::command_done;
             else
                 return ControlKind::init_error;
         },
@@ -148,6 +170,19 @@ std::string encode(const ControlMessage &message) {
                 });
                 payload.optional(value.signal,
                                  [&](int signal) { payload.varint(static_cast<std::uint64_t>(signal)); });
+            } else if constexpr (std::is_same_v<T, CommandDone>) {
+                payload.varint(value.command.number());
+                payload.optional(value.exit_code, [&](int code) {
+                    payload.varint(static_cast<std::uint64_t>(code));
+                });
+                payload.optional(value.signal, [&](int signal) {
+                    payload.varint(static_cast<std::uint64_t>(signal));
+                });
+                payload.optional(value.exec_errno, [&](int error) {
+                    payload.varint(static_cast<std::uint64_t>(error));
+                });
+                payload.u8(static_cast<std::uint8_t>(value.stop));
+                payload.varint(static_cast<std::uint64_t>(value.elapsed.count()));
             }
         },
         message);
@@ -249,6 +284,21 @@ ControlMessage decode(std::string_view packet) {
     case ControlKind::init_error:
         message = InitError{reader.text()};
         break;
+    case ControlKind::command_done: {
+        auto index = CommandIndex::from_number(static_cast<std::uint32_t>(reader.varint()));
+        if (!index)
+            throw ControlError("BAD_PACKET", "invalid command index");
+        auto code = reader.optional<int>([&] { return as_int(reader.varint()); });
+        auto signal = reader.optional<int>([&] { return as_int(reader.varint()); });
+        auto exec_errno = reader.optional<int>([&] { return as_int(reader.varint()); });
+        const auto stop = reader.u8();
+        if (stop > static_cast<std::uint8_t>(CommandStop::supervision_failure))
+            throw ControlError("BAD_PACKET", "unknown command stop reason");
+        auto elapsed = std::chrono::milliseconds(static_cast<std::int64_t>(reader.varint()));
+        message =
+            CommandDone{*index, code, signal, exec_errno, static_cast<CommandStop>(stop), elapsed};
+        break;
+    }
     default:
         throw ControlError("BAD_PACKET", "unknown control kind");
     }

@@ -23,11 +23,25 @@ void signal_children(int sig, bool isolated) {
                 system_error("session signal");
     }
 }
-Message receive_kind(ControlChannel &c, const char *kind) {
-    auto m = c.receive();
-    if (!m || m->body.at("kind") != kind)
+ControlEnvelope receive_kind(ControlChannel &c, ControlKind kind) {
+    auto envelope = c.receive();
+    if (!envelope || sandbox::kind_of(envelope->message) != kind)
         throw std::runtime_error("unexpected session frame");
-    return std::move(*m);
+    return std::move(*envelope);
+}
+
+CommandStop stop_code(const std::string &reason) {
+    if (reason == "cancelled")
+        return CommandStop::cancelled;
+    if (reason == "timeout")
+        return CommandStop::timeout;
+    if (reason == "session_closed")
+        return CommandStop::session_closed;
+    if (reason == "startup_failure")
+        return CommandStop::startup_failure;
+    if (reason == "host_error")
+        return CommandStop::supervision_failure;
+    return CommandStop::main_exit;
 }
 } // namespace
 int persistent_init(const RunConfig &config, const fs::path &root) {
@@ -38,11 +52,11 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
         if (!isolated)
             checked(::prctl(PR_SET_CHILD_SUBREAPER, 1), "session subreaper");
         auto prepare = control.receive();
-        if (prepare && prepare->body.at("kind") == "STOP") {
-            control.send("INIT_DONE");
+        if (prepare && std::holds_alternative<Stop>(prepare->message)) {
+            control.send(InitDone{});
             return 0;
         }
-        if (!prepare || prepare->body.at("kind") != "PREPARE")
+        if (!prepare || sandbox::kind_of(prepare->message) != ControlKind::prepare)
             throw std::runtime_error("expected PREPARE");
         if (isolated)
             RootfsBuilder::build(config, root);
@@ -54,33 +68,34 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
         ::close(0);
         ::close(1);
         ::close(2);
-        control.send("ENV_READY");
+        control.send(EnvReady{});
         for (;;) {
             auto frame = control.receive();
             if (!frame)
                 continue;
-            auto kind = frame->body.at("kind").get<std::string>();
-            if (kind == "STOP") {
-                control.send("INIT_DONE");
+            if (std::holds_alternative<Stop>(frame->message)) {
+                control.send(InitDone{});
                 return 0;
             }
-            if (kind == "CANCEL")
+            if (std::holds_alternative<Cancel>(frame->message))
                 continue; // The command may have completed before cancellation arrived.
-            if (kind != "STDIN" || !frame->fd)
+            if (!std::holds_alternative<StdinHandle>(frame->message) || !frame->fd)
                 throw std::runtime_error("expected STDIN fd");
             // Keep all sources above the dup2 destination range.
             UniqueFd input(checked(::fcntl(frame->fd.get(), F_DUPFD_CLOEXEC, 100), "copy stdin"));
             frame->fd.reset();
-            auto out = receive_kind(control, "STDOUT");
-            auto err = receive_kind(control, "STDERR");
+            auto out = receive_kind(control, ControlKind::stdout_handle);
+            auto err = receive_kind(control, ControlKind::stderr_handle);
             if (!out.fd || !err.fd)
                 throw std::runtime_error("missing output descriptors");
             UniqueFd output(checked(::fcntl(out.fd.get(), F_DUPFD_CLOEXEC, 100), "copy stdout"));
             UniqueFd error(checked(::fcntl(err.fd.get(), F_DUPFD_CLOEXEC, 100), "copy stderr"));
-            auto exec = receive_kind(control, "COMMAND");
-            auto spec = exec.body.at("payload");
-            auto cfg = RunConfig::parse(spec.at("config"), "/");
-            auto id = spec.at("command_id");
+            auto exec = receive_kind(control, ControlKind::command);
+            auto *command = std::get_if<Command>(&exec.message);
+            if (!command)
+                throw std::runtime_error("expected command");
+            auto cfg = RunConfig::parse(Json::parse(command->config_blob), "/");
+            const CommandIndex index = command->command;
             std::vector<char *> argv;
             for (auto &a : cfg.argv)
                 argv.push_back(a.data());
@@ -131,10 +146,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
             bool stopping = false, closing = false, main_done = false, observed = false;
             auto start = monotonic_ms(), stop_at = start;
             std::string reason;
-            Json result = {{"command_id", id},
-                           {"exit_code", nullptr},
-                           {"signal", nullptr},
-                           {"exec_errno", nullptr}};
+            CommandDone result{index};
             auto stop = [&](const std::string &why) {
                 if (!stopping) {
                     stopping = true;
@@ -152,11 +164,10 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                 if (fds[0].revents) {
                     auto m = control.receive(true);
                     if (m) {
-                        auto k = m->body.at("kind");
-                        if (k == "STOP") {
+                        if (std::holds_alternative<Stop>(m->message)) {
                             closing = true;
                             stop("session_closed");
-                        } else if (k == "CANCEL")
+                        } else if (std::holds_alternative<Cancel>(m->message))
                             stop("cancelled");
                         else
                             throw std::runtime_error("invalid active command frame");
@@ -166,7 +177,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                     int e = 0;
                     auto count = ::read(exec_error.read.get(), &e, sizeof(e));
                     if (count == sizeof(e)) {
-                        result["exec_errno"] = e;
+                        result.exec_errno = e;
                         stop("startup_failure");
                         observed = true;
                         exec_error.read.reset();
@@ -184,9 +195,9 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                         if (child == pid) {
                             main_done = true;
                             if (WIFEXITED(status))
-                                result["exit_code"] = WEXITSTATUS(status);
+                                result.exit_code = WEXITSTATUS(status);
                             if (WIFSIGNALED(status))
-                                result["signal"] = WTERMSIG(status);
+                                result.signal = WTERMSIG(status);
                             stop("main_exited");
                         }
                         continue;
@@ -207,20 +218,20 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                 if (stopping && now - stop_at > cfg.limits.grace_ms + 4000)
                     throw std::runtime_error("command descendants cleanup deadline");
                 if (main_done && empty && observed) {
-                    result["stop_reason"] = reason;
-                    result["execution_ms"] = now - start;
-                    control.send("COMMAND_DONE", result);
+                    result.stop = stop_code(reason);
+                    result.elapsed = std::chrono::milliseconds(static_cast<std::int64_t>(now - start));
+                    control.send(result);
                     break;
                 }
             }
             if (closing) {
-                control.send("INIT_DONE");
+                control.send(InitDone{});
                 return 0;
             }
         }
     } catch (const std::exception &e) {
         try {
-            control.send("INIT_ERROR", {{"error", e.what()}});
+            control.send(InitError{e.what()});
         } catch (...) {
         }
         try {

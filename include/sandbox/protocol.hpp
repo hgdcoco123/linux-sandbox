@@ -1,12 +1,14 @@
 #pragma once
+#include "sandbox/core/control.hpp"
 #include "sandbox/linux.hpp"
 #include <optional>
 namespace sandbox {
 struct ChannelClosed : std::runtime_error {
     ChannelClosed() : std::runtime_error("control channel closed") {}
 };
-struct Message {
-    Json body;
+// A decoded control message and the descriptor it legitimately carried.
+struct ControlEnvelope {
+    ControlMessage message;
     UniqueFd fd;
 };
 class ControlChannel {
@@ -17,14 +19,15 @@ class ControlChannel {
     int fd() const {
         return fd_.get();
     }
-    void send(const std::string &kind, const Json &payload = Json::object(), int pass_fd = -1);
-    std::optional<Message> receive(bool nonblock = false);
+    // The descriptor count is part of each message's contract; passing one for a
+    // body-only message is a programming error rather than a runtime case.
+    void send(const ControlMessage &, int pass_fd = -1);
+    std::optional<ControlEnvelope> receive(bool nonblock = false);
     void close() {
         fd_.reset();
     }
 
   private:
     UniqueFd fd_;
-    std::uint64_t tx_ = 0, rx_ = 0;
 };
 } // namespace sandbox

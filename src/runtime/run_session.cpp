@@ -152,7 +152,7 @@ void RunSession::apply(const std::vector<SupervisionAction> &actions) {
                 if constexpr (std::is_same_v<T, SignalTarget>) {
                     if (launcher_ && init_created_ && init_channel_open_) {
                         try {
-                            launcher_->init_channel().send("STOP");
+                            launcher_->init_channel().send(Stop{});
                         } catch (const std::exception &e) {
                             if (logger_)
                                 logger_->warn("stop channel: {}", e.what());
@@ -213,13 +213,11 @@ void RunSession::observe_streams(Millis now) {
     }
 }
 
-void RunSession::on_launcher(Message message) {
-    auto kind = message.body.at("kind").get<std::string>();
-    auto p = message.body.at("payload");
-    if (kind == "INIT_CREATED") {
+void RunSession::on_launcher(ControlEnvelope message) {
+    if (auto *created = std::get_if<InitCreated>(&message.message)) {
         if (init_created_ || !message.fd || !core_)
             throw std::runtime_error("unexpected init identity");
-        auto pid = p.at("pid").get<pid_t>();
+        auto pid = created->pid;
         launcher_->set_init_identity(pid, std::move(message.fd));
         init_created_ = true;
         store_->owner_update({{"init_pid", pid}, {"init_start", process_start(pid)}});
@@ -232,25 +230,23 @@ void RunSession::on_launcher(Message message) {
             sample_metrics(true); // Establish the baseline before the target can execute.
         }
         const bool stopping = core_->phase() == Phase::stopping || core_->finished();
-        launcher_->init_channel().send(stopping ? "STOP" : "PREPARE");
+        launcher_->init_channel().send(stopping ? ControlMessage{Stop{}} : ControlMessage{Prepare{}});
         logger_->info("init created and resources attached, pid={}", pid);
-    } else if (kind == "INIT_REAPED") {
+    } else if (auto *reaped = std::get_if<InitReaped>(&message.message)) {
         if (!init_created_ || init_reaped_)
             throw std::runtime_error("unexpected init reap");
         init_reaped_ = true;
-        int status = p.at("wait_status").get<int>();
+        int status = reaped->wait_status;
         init_abnormal_ = !WIFEXITED(status) || WEXITSTATUS(status) != 0;
-    } else if (kind == "BOOTSTRAP_ERROR")
-        throw std::runtime_error("launcher: " + p.at("error").get<std::string>());
+    } else if (auto *error = std::get_if<BootstrapError>(&message.message))
+        throw std::runtime_error("launcher: " + error->message);
     else
-        throw std::runtime_error("unknown launcher event: " + kind);
+        throw std::runtime_error("unknown launcher event");
 }
 
-void RunSession::on_init(Message message) {
-    auto kind = message.body.at("kind").get<std::string>();
-    auto p = message.body.at("payload");
+void RunSession::on_init(ControlEnvelope message) {
     const Millis now = now_ms();
-    if (kind == "ENV_READY") {
+    if (std::holds_alternative<EnvReady>(message.message)) {
         if (!init_created_ || env_ready_)
             throw std::runtime_error("unexpected ENV_READY");
         env_ready_ = true;
@@ -258,33 +254,28 @@ void RunSession::on_init(Message message) {
         apply(core_->env_ready(now));
         if (core_->phase() != Phase::running)
             return; // STOP is already queued; never exec after a cancellation.
-        launcher_->init_channel().send("EXEC");
+        launcher_->init_channel().send(Exec{});
         transition(RunState::running);
-    } else if (kind == "EXEC_OBSERVED") {
+    } else if (std::holds_alternative<ExecObserved>(message.message)) {
         if (!env_ready_ || report_.exec_observed)
             throw std::runtime_error("unexpected exec observation");
         report_.exec_observed = true;
         apply(core_->exec_observed(now));
-    } else if (kind == "START_FAILED") {
-        report_.exec_error = "stage=" + std::to_string(p.at("stage").get<int>()) +
-                             ", errno=" + std::to_string(p.at("errno").get<int>());
+    } else if (auto *failed = std::get_if<StartFailed>(&message.message)) {
+        report_.exec_error =
+            "stage=" + std::to_string(failed->stage) + ", errno=" + std::to_string(failed->error);
         apply(core_->start_failed(report_.exec_error, now));
-    } else if (kind == "MAIN_EXIT") {
+    } else if (auto *exit = std::get_if<MainExit>(&message.message)) {
         if (report_.exit_code || report_.term_signal)
             throw std::runtime_error("duplicate MAIN_EXIT");
-        std::optional<int> code, signal;
-        if (!p.at("exit_code").is_null())
-            code = p.at("exit_code").get<int>();
-        if (!p.at("signal").is_null())
-            signal = p.at("signal").get<int>();
-        apply(core_->main_exited(code, signal, now));
-    } else if (kind == "INIT_DONE") {
+        apply(core_->main_exited(exit->exit_code, exit->signal, now));
+    } else if (std::holds_alternative<InitDone>(message.message)) {
         init_done_ = true;
-    } else if (kind == "INIT_ERROR") {
-        report_.exec_error = p.at("error").get<std::string>();
+    } else if (auto *error = std::get_if<InitError>(&message.message)) {
+        report_.exec_error = error->message;
         apply(core_->start_failed(report_.exec_error, now));
     } else
-        throw std::runtime_error("unknown init event: " + kind);
+        throw std::runtime_error("unknown init event");
 }
 
 void RunSession::supervise(SignalSource &signals) {
@@ -296,7 +287,7 @@ void RunSession::supervise(SignalSource &signals) {
             return;
         auto &channel = parent ? launcher_->launcher_channel() : launcher_->init_channel();
         for (int budget = 0; budget < 32; ++budget) {
-            std::optional<Message> message;
+            std::optional<ControlEnvelope> message;
             try {
                 message = channel.receive(true);
             } catch (const ChannelClosed &e) {
