@@ -43,6 +43,23 @@ OutputStats stats_of(const StreamReport &report) {
     return stats;
 }
 
+// The report keeps the field's established vocabulary: a natural exit leaves
+// stop_reason empty (exit_code/signal already say what happened), and only an
+// abnormal end names a reason.
+std::string stop_reason_of(const ExecutionOutcome &outcome) {
+    if (outcome.exit_code() || outcome.term_signal())
+        return {};
+    if (std::holds_alternative<TimedOut>(outcome.variant()))
+        return "timeout";
+    if (std::holds_alternative<Cancelled>(outcome.variant()))
+        return "cancelled";
+    if (std::holds_alternative<Oom>(outcome.variant()))
+        return "oom";
+    if (std::holds_alternative<StartupFailed>(outcome.variant()))
+        return "startup_failure";
+    return "host_error";
+}
+
 // Report vocabulary. The outcome is the source of truth; this only names it.
 const char *summary_of(const ExecutionOutcome &outcome) {
     if (auto code = outcome.exit_code())
@@ -530,7 +547,7 @@ void RunSession::finalize() {
     report_.exit_code = result.outcome.exit_code();
     report_.term_signal = result.outcome.term_signal();
     report_.summary = summary_of(result.outcome);
-    report_.stop_reason = std::string(result.outcome.name());
+    report_.stop_reason = stop_reason_of(result.outcome);
     report_.startup_ms =
         static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.startup).count());
     report_.execution_ms = static_cast<std::uint64_t>(
