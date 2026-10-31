@@ -45,6 +45,25 @@ run configure cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 run build cmake --build build --parallel 2
 run ctest ctest --test-dir build --output-on-failure
 
+# Print the essentials to the terminal so they can be copied straight into a
+# chat without opening any files. Everything is still saved in $out.
+printf '\n===== BUILD (tail) =====\n'
+tail -n 20 "$out/build.txt" 2>/dev/null
+
+printf '\n===== SUMMARY =====\n'
+cat "$out/summary.txt"
+if ! grep -q '^build .*exit=0' "$out/summary.txt"; then
+    printf '\n===== BUILD FAILED (tail 60) =====\n'
+    tail -n 60 "$out/build.txt" 2>/dev/null
+fi
+if ! grep -q '^ctest .*exit=0' "$out/summary.txt"; then
+    printf '\n===== TEST FAILURES =====\n'
+    grep -E 'Failed|\*\*\*|FAILED|Errors while|tests passed|tests failed' "$out/ctest.txt" 2>/dev/null | head -60
+    printf '\n----- tail of ctest output -----\n'
+    tail -n 60 "$out/ctest.txt" 2>/dev/null
+fi
+printf '\n===== END =====\n'
+
 if [ "${1:-}" != "--skip-iso" ] && [ -x build/sandbox ] && [ -f build/sandbox-fixture ]; then
     test_root=$(mktemp -d /tmp/sbx-acc.XXXXXX)
     run fixture python3 tools/make_runtime.py --fixture build/sandbox-fixture \
