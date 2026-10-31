@@ -100,6 +100,23 @@ struct ExecutionResult {
 不会再被改写成 `host_error`——它显示为 `success` + `cleanup_errors`，并可用
 `verdict_of()` 得到 `cleanup_incomplete`。
 
+## 3.9 控制通道：消息类型化 + FD 契约是数据
+
+`core/control.hpp` 把 launcher/init 通道的消息也变成封闭变体（17 种），并规定每种消息
+**必须携带几个描述符、用来做什么**：
+
+| 消息 | FD | 用途 |
+|---|---|---|
+| `init_created` | 1 | init 的 pidfd |
+| `stdin_handle` / `stdout_handle` / `stderr_handle` | 1 | 目标进程三条管道的对应端 |
+| 其余 13 种 | 0 | — |
+
+- `validate_fd_count(kind, arrived)` 在解释 payload **之前**就拒绝多余/缺失的描述符；
+  旧实现是 `kind == "INIT_CREATED" || "STDIN" || ...` 的布尔表达式。
+- `command` 携带的是执行配置的**不透明 blob**——配置是边界，控制层不解释它。
+- 帧格式 `CTL1 + kind + varint 长度`，与会话通道共用 `core/binary.hpp` 的编解码原语，
+  不再各写一份读写器。
+
 ## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
 - 停止流程只有一条：记录原因 → 停止受理输入 → 请求退出 → 宽限期 → 强制终止 → 确认集合为空 → 收尾输出 → 落盘。取消与超时只是入口不同。
@@ -117,7 +134,7 @@ struct ExecutionResult {
 | P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
-| P6 | 控制通道消息类型化，FD 契约按消息类型声明 | `[待做]` |
+| P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` 模型与契约；通道接线在 P6.5 |
 | P7 | 批次调度改用同一执行核心 | `[待做]` |
 | P8 | 故障注入测试（步骤失败、FD 缺失/多余、写盘失败、恢复中断） | `[待做]` |
 

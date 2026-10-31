@@ -1,5 +1,6 @@
-#include "sandbox/core/wire.hpp"
+﻿#include "sandbox/core/wire.hpp"
 
+#include "sandbox/core/binary.hpp"
 #include "sandbox/core/record_json.hpp"
 
 #include <cstdint>
@@ -41,92 +42,17 @@ enum class WorkspaceTag : std::uint8_t { snapshot = 1, manifest = 2, export_file
     throw WireError(std::move(code), std::move(message));
 }
 
-class Writer {
-  public:
-    std::string data;
-
-    void u8(std::uint8_t value) { data.push_back(static_cast<char>(value)); }
-
-    void varint(std::uint64_t value) {
-        while (value >= 0x80) {
-            data.push_back(static_cast<char>((value & 0x7f) | 0x80));
-            value >>= 7;
-        }
-        data.push_back(static_cast<char>(value));
-    }
-
-    void text(std::string_view value) {
-        varint(value.size());
-        data.append(value);
-    }
-
-    void boolean(bool value) { u8(value ? 1 : 0); }
-
-    template <class T> void optional(const std::optional<T> &value, auto &&body) {
-        if (!value) {
-            u8(0);
-            return;
-        }
-        u8(1);
-        body(*value);
+// Packet-level errors from the shared binary primitives are reported as wire
+// errors with the channel's own code.
+struct Errors {
+    [[noreturn]] static void fail(std::string code, std::string message) {
+        if (code == "BAD_PACKET")
+            code = "BAD_WIRE_PACKET";
+        throw WireError(std::move(code), std::move(message));
     }
 };
-
-class Reader {
-  public:
-    explicit Reader(std::string_view input) : input_(input) {}
-
-    [[nodiscard]] std::size_t remaining() const noexcept { return input_.size() - position_; }
-
-    std::uint8_t u8() {
-        if (position_ >= input_.size())
-            fail("BAD_WIRE_PACKET", "truncated packet");
-        return static_cast<std::uint8_t>(input_[position_++]);
-    }
-
-    std::uint64_t varint() {
-        std::uint64_t value = 0;
-        for (int shift = 0; shift < 64; shift += 7) {
-            auto byte = u8();
-            value |= static_cast<std::uint64_t>(byte & 0x7f) << shift;
-            if ((byte & 0x80) == 0)
-                return value;
-        }
-        fail("BAD_WIRE_PACKET", "varint overflow");
-    }
-
-    std::string text() {
-        auto length = varint();
-        if (length > remaining())
-            fail("BAD_WIRE_PACKET", "text length exceeds packet");
-        std::string value(input_.substr(position_, static_cast<std::size_t>(length)));
-        position_ += static_cast<std::size_t>(length);
-        return value;
-    }
-
-    bool boolean() {
-        auto value = u8();
-        if (value > 1)
-            fail("BAD_WIRE_PACKET", "invalid boolean");
-        return value == 1;
-    }
-
-    template <class T> std::optional<T> optional(auto &&body) {
-        if (!boolean())
-            return std::nullopt;
-        return body();
-    }
-
-    void require_end() const {
-        if (position_ != input_.size())
-            fail("BAD_WIRE_PACKET", "trailing bytes after fields");
-    }
-
-  private:
-    std::string_view input_;
-    std::size_t position_ = 0;
-};
-
+using Writer = binary::Writer;
+using Reader = binary::Reader<Errors>;
 void encode_outcome(Writer &writer, const ExecutionOutcome &outcome) {
     const auto &value = outcome.variant();
     if (std::holds_alternative<Exited>(value)) {
