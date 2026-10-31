@@ -48,6 +48,7 @@ Json RunReport::json() const {
     return {{"schema_version", 1},
             {"run_id", id},
             {"summary", summary},
+            {"verdict", verdict},
             {"isolated", isolated},
             {"runtime_prepared", runtime_prepared},
             {"stop_reason", stop_reason},

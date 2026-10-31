@@ -547,6 +547,7 @@ void RunSession::finalize() {
     report_.exit_code = result.outcome.exit_code();
     report_.term_signal = result.outcome.term_signal();
     report_.summary = summary_of(result.outcome);
+    report_.verdict = verdict_name(verdict_of(result));
     report_.stop_reason = stop_reason_of(result.outcome);
     report_.startup_ms =
         static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.startup).count());

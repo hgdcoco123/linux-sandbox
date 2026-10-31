@@ -167,6 +167,9 @@ int main(int argc, char **argv) {
         dirty_cleanup.conclude();
         require(dirty_cleanup.summary == "success" && dirty_cleanup.cli_code() == 0,
                 "a cleanup failure must not rewrite the target result");
+        dirty_cleanup.verdict = "cleanup_incomplete";
+        require(dirty_cleanup.json()["verdict"] == "cleanup_incomplete",
+                "the verdict is reported alongside the summary");
         require(!dirty_cleanup.cleanup_errors.empty(), "the cleanup failure stays reported");
         report.id = "quote\"slash\\newline\n中文";
         auto serialized = report.json().dump();

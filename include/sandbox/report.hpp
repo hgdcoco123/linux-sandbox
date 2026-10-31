@@ -23,6 +23,10 @@ struct StreamReport {
 };
 struct RunReport {
     std::string id, summary = "host_error", stop_reason, exec_error;
+    // One actionable word for the whole run (ok / target_failed / harness_error /
+    // cleanup_incomplete). `summary` keeps naming the target result; this is the
+    // verdict a caller should branch on.
+    std::string verdict = "unknown";
     bool isolated = false, exec_observed = false, descendants_empty = false;
     bool launcher_reaped = false, cgroup_removed = false;
     bool runtime_prepared = false;
