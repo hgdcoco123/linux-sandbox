@@ -101,10 +101,10 @@ std::vector<SupervisionAction> ExecutionCore::main_exited(std::optional<int> exi
         begin_drain(now);
         return maybe_finish(now);
     }
-    if (!natural_exit_ && !natural_signal_) {
-        natural_exit_ = exit_code;
-        natural_signal_ = term_signal;
-    }
+    if (natural_exit_ || natural_signal_)
+        return {}; // a second exit report is not a new fact
+    natural_exit_ = exit_code;
+    natural_signal_ = term_signal;
     exit_at_ = now;
     begin_drain(now);
     // A dead main process does not mean dead descendants.

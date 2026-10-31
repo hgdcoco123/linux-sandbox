@@ -89,7 +89,11 @@ class ExecutionCore {
 
   private:
     [[nodiscard]] bool outcome_decided() const noexcept { return outcome_.has_value(); }
-    [[nodiscard]] bool outputs_finished() const noexcept { return out_finished_ && err_finished_; }
+    // A finished writer is not the same fact as the producer reaching EOF; both
+    // streams need both facts before the execution can complete.
+    [[nodiscard]] bool outputs_finished() const noexcept {
+        return out_eof_ && err_eof_ && out_finished_ && err_finished_;
+    }
     void decide_outcome();
     void begin_drain(Millis now);
     std::vector<SupervisionAction> maybe_finish(Millis now);

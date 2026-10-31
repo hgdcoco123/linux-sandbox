@@ -77,7 +77,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                 control.send(InitDone{});
                 return 0;
             }
-            if (std::holds_alternative<Cancel>(frame->message))
+            if (std::holds_alternative<CancelCommand>(frame->message))
                 continue; // The command may have completed before cancellation arrived.
             if (!std::holds_alternative<StdinHandle>(frame->message) || !frame->fd)
                 throw std::runtime_error("expected STDIN fd");
@@ -167,7 +167,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
                         if (std::holds_alternative<Stop>(m->message)) {
                             closing = true;
                             stop("session_closed");
-                        } else if (std::holds_alternative<Cancel>(m->message))
+                        } else if (std::holds_alternative<CancelCommand>(m->message))
                             stop("cancelled");
                         else
                             throw std::runtime_error("invalid active command frame");

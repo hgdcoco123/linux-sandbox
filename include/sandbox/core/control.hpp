@@ -84,7 +84,7 @@ struct BootstrapError {
 struct Prepare {};
 struct Exec {};
 struct Stop {};
-struct Cancel {};
+struct CancelCommand {};
 struct StdinHandle {
     CommandIndex command;
 };
@@ -126,7 +126,7 @@ struct CommandDone {
 };
 
 using ControlMessage = std::variant<InitCreated, InitReaped, BootstrapError, Prepare, Exec, Stop,
-                                    Cancel, StdinHandle, StdoutHandle, StderrHandle, Command, EnvReady,
+                                    CancelCommand, StdinHandle, StdoutHandle, StderrHandle, Command, EnvReady,
                                     ExecObserved, StartFailed, MainExit, InitDone, InitError,
                                     CommandDone>;
 

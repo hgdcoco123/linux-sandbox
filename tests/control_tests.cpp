@@ -55,7 +55,7 @@ void test_round_trip() {
     round_trip(Prepare{}, "prepare");
     round_trip(Exec{}, "exec");
     round_trip(Stop{}, "stop");
-    round_trip(Cancel{}, "cancel");
+    round_trip(CancelCommand{}, "cancel");
     round_trip(StdinHandle{*CommandIndex::from_number(1)}, "stdin_handle");
     round_trip(StdoutHandle{*CommandIndex::from_number(2)}, "stdout_handle");
     round_trip(StderrHandle{*CommandIndex::from_number(3)}, "stderr_handle");

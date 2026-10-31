@@ -210,7 +210,7 @@ class SessionController {
         if (op == "cancel") {
             if (!current().is_null() && !lifecycle_.stopping()) {
                 lifecycle_.require_running();
-                launcher_->init_channel().send(Cancel{});
+                launcher_->init_channel().send(CancelCommand{});
                 if (execution_)
                     execution_->input.write.reset();
             }

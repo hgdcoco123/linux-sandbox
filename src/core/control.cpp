@@ -1,4 +1,4 @@
-﻿#include "sandbox/core/control.hpp"
+#include "sandbox/core/control.hpp"
 
 #include "sandbox/core/binary.hpp"
 
@@ -116,7 +116,7 @@ ControlKind kind_of(const ControlMessage &message) noexcept {
                 return ControlKind::exec;
             else if constexpr (std::is_same_v<T, Stop>)
                 return ControlKind::stop;
-            else if constexpr (std::is_same_v<T, Cancel>)
+            else if constexpr (std::is_same_v<T, CancelCommand>)
                 return ControlKind::cancel;
             else if constexpr (std::is_same_v<T, StdinHandle>)
                 return ControlKind::stdin_handle;
@@ -232,7 +232,7 @@ ControlMessage decode(std::string_view packet) {
         message = Stop{};
         break;
     case ControlKind::cancel:
-        message = Cancel{};
+        message = CancelCommand{};
         break;
     case ControlKind::stdin_handle: {
         auto index = CommandIndex::from_number(static_cast<std::uint32_t>(reader.varint()));
