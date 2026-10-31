@@ -80,7 +80,8 @@ powershell -ExecutionPolicy Bypass -File tools/cross-verify.ps1 `
     -Zig <zig.exe> -HostWork <含 sysroot 与 protobuf 预编译对象的目录>
 ```
 
-三段：可移植测试 → 41 个 Linux 翻译单元交叉编译 → 链接 `sandbox` 与 `sandbox-launcher`。
+四段：可移植测试 → 全部 Linux 翻译单元与测试源码编译 → 链接 `sandbox`、`sandbox-launcher`
+→ 链接全部测试可执行文件。数量随文件增减变化，脚本不写死。
 第三步是关键：逐文件编译通过仍可能留下未定义或重复符号，链接才证明整棵树自洽。
 
 ## 实机验收
