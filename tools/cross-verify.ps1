@@ -126,6 +126,14 @@ foreach ($source in @(Get-ChildItem (Join-Path $root 'apps') -Recurse -Filter *.
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL compile $name" -ForegroundColor Red; $failures++ }
 }
 
+# 2.5 Every Linux test must compile too: CMake builds them, so a break here
+# fails a real build even though this script never runs them.
+Step 'linux tests compile'
+foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Filter *.cpp)) {
+    $object = Join-Path $Build "$($source.BaseName)-test.o"
+    & $Zig c++ -target $Target -std=c++20 -O1 -c @includes -o $object $source.FullName
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAIL test-compile $($source.Name)" -ForegroundColor Red; $failures++ }
+}
 # 3. Link. A missing or duplicated symbol only shows up here.
 Step 'linux link'
 $protobuf = Get-ChildItem (Join-Path $HostWork 'protobuf-cross-build') -Filter 'libpb_*.o' |

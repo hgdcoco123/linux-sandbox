@@ -19,8 +19,9 @@ int main() {
     for (int i = 0; i < blocks; ++i) {
         auto before = steady_clock::now();
         sync.write(block);
-        sync_max =
-            std::max(sync_max, duration_cast<nanoseconds>(steady_clock::now() - before).count());
+        sync_max = std::max<std::int64_t>(
+            sync_max, static_cast<std::int64_t>(
+                          duration_cast<nanoseconds>(steady_clock::now() - before).count()));
     }
     auto sync_total = duration_cast<microseconds>(steady_clock::now() - start).count();
     BoundedWriter writer(std::make_unique<SlowSink>(), 65536, [] {});
@@ -31,8 +32,9 @@ int main() {
         auto copy = block;
         auto before = steady_clock::now();
         bool accepted = writer.try_submit(std::move(copy));
-        submit_max =
-            std::max(submit_max, duration_cast<nanoseconds>(steady_clock::now() - before).count());
+        submit_max = std::max<std::int64_t>(
+            submit_max, static_cast<std::int64_t>(
+                            duration_cast<nanoseconds>(steady_clock::now() - before).count()));
         if (accepted)
             ++i;
         else {
