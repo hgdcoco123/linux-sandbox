@@ -61,6 +61,8 @@ template <class Errors> class Reader {
         std::uint64_t value = 0;
         for (int shift = 0; shift < 64; shift += 7) {
             auto byte = u8();
+            if (shift == 63 && (byte & 0xfe) != 0)
+                Errors::fail("BAD_PACKET", "varint overflow");
             value |= static_cast<std::uint64_t>(byte & 0x7f) << shift;
             if ((byte & 0x80) == 0)
                 return value;

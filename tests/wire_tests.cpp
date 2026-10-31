@@ -177,6 +177,13 @@ void test_rejections() {
         packet.append("\xff\xff\x7f"); // huge varint length
         decode_request(packet);
     }, "payload length overflow");
+    check_wire_rejects([] {
+        auto packet = encode(SessionRequest::create(Status{}));
+        packet.resize(6);
+        packet.append(9, static_cast<char>(0x80));
+        packet.push_back(static_cast<char>(0x02));
+        decode_request(packet);
+    }, "varint exceeds uint64");
 
     try {
         SessionRequest::create(StdinWrite{*CommandIndex::from_number(1), std::string(4097, 'x')});
