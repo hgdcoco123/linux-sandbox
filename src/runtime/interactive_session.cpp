@@ -216,10 +216,13 @@ class SessionController {
                     close("closed");
                     return {{"status", "accepted"}};
                 } else if constexpr (std::is_same_v<T, Cancel>) {
+                    // A named command must be the active one whether or not there
+                    // is anything to cancel: an old handle may not address a newer
+                    // command, and must not silently succeed either.
+                    if (value.command)
+                        check_active(*value.command);
                     if (!current().is_null() && !lifecycle_.stopping()) {
                         lifecycle_.require_running();
-                        if (value.command)
-                            check_active(*value.command);
                         launcher_->init_channel().send(CancelCommand{});
                         if (execution_)
                             execution_->input.write.reset();

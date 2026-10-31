@@ -52,6 +52,11 @@ std::optional<ControlEnvelope> ControlChannel::receive(bool nonblock) {
     } while (n < 0 && errno == EINTR);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
         return std::nullopt;
+    // A peer that resets the connection is gone in exactly the same sense as one
+    // that closes it: the channel ends here. Treating the reset as a host error
+    // aborted supervision while the target's descendants were still being reaped.
+    if (n < 0 && (errno == ECONNRESET || errno == EPIPE))
+        throw ChannelClosed{};
     if (n < 0)
         system_error("recvmsg");
     if (n == 0)
