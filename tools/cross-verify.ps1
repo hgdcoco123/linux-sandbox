@@ -75,6 +75,23 @@ foreach ($name in $suites.Keys) {
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL run $name" -ForegroundColor Red; $failures++ }
 }
 
+# 1.5 CMakeLists must list exactly the sources that exist. This script compiles
+# the tree directly, so without this check a file missing from CMake would build
+# here and fail on a real Linux CMake build.
+Step 'cmake source list'
+$cmake = Get-Content (Join-Path $root 'CMakeLists.txt') -Raw
+$listed = [regex]::Matches($cmake, '(?m)(?:^|\s)((?:src|apps)/[A-Za-z0-9_/]+\.cpp)') |
+    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+$present = @(Get-ChildItem (Join-Path $root 'src') -Recurse -Filter *.cpp) +
+           @(Get-ChildItem (Join-Path $root 'apps') -Recurse -Filter *.cpp) | ForEach-Object {
+    $_.FullName.Substring($root.Length + 1) -replace '\\', '/'
+} | Sort-Object -Unique
+$drifted = @($present | Where-Object { $_ -notin $listed }) +
+           @($listed | Where-Object { $_ -notin $present })
+if ($drifted.Count -ne 0) {
+    Write-Host "FAIL cmake source list drift: $($drifted -join ', ')" -ForegroundColor Red
+    $failures++
+}
 # 2. Cross-compile every Linux translation unit.
 Step 'linux cross-compile'
 $includes = @(
