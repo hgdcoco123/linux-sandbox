@@ -88,6 +88,11 @@ void RunReport::conclude() {
         summary = "unknown_exit";
 }
 int RunReport::cli_code() const {
+    // The exit status answers "can this environment be trusted?", the summary
+    // answers "what did the target do?". A dirty cleanup therefore keeps its
+    // documented 125 without rewriting the target result.
+    if (verdict == "cleanup_incomplete")
+        return 125;
     if (summary == "success")
         return 0;
     if (summary == "nonzero_exit")

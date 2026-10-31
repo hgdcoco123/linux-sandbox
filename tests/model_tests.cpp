@@ -165,12 +165,14 @@ int main(int argc, char **argv) {
         dirty_cleanup.exit_code = 0;
         dirty_cleanup.cleanup_errors.push_back("cgroup still populated");
         dirty_cleanup.conclude();
-        require(dirty_cleanup.summary == "success" && dirty_cleanup.cli_code() == 0,
+        require(dirty_cleanup.summary == "success",
                 "a cleanup failure must not rewrite the target result");
         dirty_cleanup.verdict = "cleanup_incomplete";
         require(dirty_cleanup.json()["verdict"] == "cleanup_incomplete",
                 "the verdict is reported alongside the summary");
         require(!dirty_cleanup.cleanup_errors.empty(), "the cleanup failure stays reported");
+        require(dirty_cleanup.cli_code() == 125,
+                "a dirty cleanup keeps the documented 125 exit status");
         report.id = "quote\"slash\\newline\n中文";
         auto serialized = report.json().dump();
         require(Json::parse(serialized)["run_id"] == report.id, "JSON escaping and UTF8");
