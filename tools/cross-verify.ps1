@@ -148,6 +148,16 @@ foreach ($binary in @(
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL link $($binary.name)" -ForegroundColor Red; $failures++ }
 }
 
+# 4. Link every test executable. Compiling each test proves it parses; linking
+# proves the symbols it uses still exist after a refactor.
+Step 'linux tests link'
+foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Filter *.cpp)) {
+    $object = Join-Path $Build "$($source.BaseName)-test.o"
+    if (-not (Test-Path $object)) { continue }
+    & $Zig c++ -target $Target -o (Join-Path $Build "$($source.BaseName)-test") `
+        $object $objects $protobuf $generated -L $seccomp -lseccomp -lpthread
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAIL test-link $($source.Name)" -ForegroundColor Red; $failures++ }
+}
 Step 'summary'
 if ($failures -ne 0) {
     Write-Host "$failures failure(s)" -ForegroundColor Red
