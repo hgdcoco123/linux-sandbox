@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+"""Installed rootless entry: request delegation from the current user's systemd."""
+import argparse
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+# Source tree and managed installation use the same launch planner.
+_module_root = Path(__file__).resolve().parents[1]
+if not (_module_root / "sdk/launch.py").is_file():
+    _module_root = _module_root / "share/linux-sandbox"
+sys.path.insert(0, str(_module_root))
+from sdk.launch import delegation_command, protected
+
+PREFIX = Path("/opt/linux-sandbox")
+
+
+def command(args):
+    wrapper = PREFIX / "share/linux-sandbox/tools/delegated_run.py"
+    binary = PREFIX / "bin/sandbox"
+    if args.config:
+        config = Path(args.config).resolve()
+        value = json.loads(config.read_text())
+        configs = [task["config"] for task in value.get("tasks", [])] if getattr(args, "batch", False) else [value]
+        if not configs or any(item.get("mode", "isolated") != "isolated" for item in configs):
+            raise ValueError("sandbox-run accepts isolated configurations only")
+    return delegation_command(binary, wrapper, config=args.config, test_runtime=args.test_runtime,
+                              state_root=args.state_root, session=getattr(args, "session", False), batch=getattr(args, "batch", False))
+
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--config")
+    group.add_argument("--test-runtime")
+    parser.add_argument("--state-root")
+    parser.add_argument("--print-command", action="store_true")
+    parser.add_argument("--session", action="store_true")
+    parser.add_argument("--batch", action="store_true")
+    args = parser.parse_args()
+    if args.batch and (args.session or args.test_runtime):
+        parser.error("--batch requires --config and cannot be combined with --session")
+    if os.geteuid() == 0:
+        parser.error("run as your ordinary user; this entry never elevates privileges")
+    for path in (PREFIX/"bin/sandbox", PREFIX/"bin/sandbox-launcher",
+                 PREFIX/"share/linux-sandbox/tools/delegated_run.py",
+                 PREFIX/"share/linux-sandbox/sdk/launch.py"):
+        protected(path)
+    argv = command(args)
+    if args.print_command:
+        print(json.dumps(argv))
+        return 0
+    # No shell expansion, sudo, system service, or global cgroup edits.
+    return subprocess.call(argv)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SystemExit("sandbox-run: " + str(error))

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "mode": "process",
+  "network": "host",
+  "argv": ["/bin/true"],
+  "cwd": "/tmp",
+  "session": {"enabled": true, "total_ms": 3600000, "idle_ms": 300000},
+  "limits": {"wall_ms": 30000, "grace_ms": 500, "capture_bytes": 8388608}
+}

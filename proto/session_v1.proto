@@ -1,0 +1,141 @@
+// External session control protocol. JSON configuration, CLI presentation and
+// persisted records are separate. Field numbers are never reused.
+syntax = "proto3";
+
+package sandbox.session.v1;
+
+message Environment { map<string, string> values = 1; }
+message ExecuteRequest {
+  optional string request_id = 1;
+  repeated string argv = 2;
+  optional string cwd = 3;
+  Environment env = 4;
+  optional uint64 wall_ms = 5;
+}
+message EmptyRequest {}
+message CommandRequest { string command_id = 1; }
+message CancelRequest { optional string command_id = 1; }
+message InputRequest { string command_id = 1; bytes data = 2; }
+enum Stream { STREAM_UNSPECIFIED = 0; STDOUT = 1; STDERR = 2; }
+message OutputRequest {
+  string command_id = 1;
+  Stream stream = 2;
+  uint64 offset = 3;
+}
+message RequestStatusRequest { string request_id = 1; }
+message SnapshotRequest { string source = 1; string name = 2; }
+message ExportRequest { string destination = 1; }
+message WorkspaceRequest {
+  oneof operation {
+    SnapshotRequest snapshot = 1;
+    EmptyRequest manifest = 2;
+    ExportRequest export_files = 3;
+  }
+}
+message SessionRequest {
+  uint32 protocol_version = 1;
+  // Existing JSON application contract version, independent of wire version.
+  uint32 application_version = 2;
+  oneof operation {
+    ExecuteRequest execute = 10;
+    EmptyRequest status = 11;
+    CancelRequest cancel = 12;
+    EmptyRequest close = 13;
+    InputRequest stdin_write = 14;
+    CommandRequest stdin_close = 15;
+    OutputRequest output = 16;
+    CommandRequest result = 17;
+    RequestStatusRequest request_status = 18;
+    WorkspaceRequest workspace = 19;
+  }
+}
+message Error {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+  optional string request_id = 4;
+}
+message StreamSummary {
+  uint64 saved_bytes = 1;
+  uint64 discarded_bytes = 2;
+  bool eof = 3;
+  bool flushed = 4;
+  uint64 queue_peak_bytes = 5;
+  uint64 backpressure_events = 6;
+  uint64 failed_bytes = 7;
+  string write_error = 8;
+  uint64 seen = 9;
+  uint64 stored = 10;
+}
+message CommandRecord {
+  string command_id = 1;
+  optional string request_id = 2;
+  repeated string argv = 3;
+  optional string cwd = 4;
+  string state = 5;
+  optional int32 exit_code = 6;
+  optional int32 signal = 7;
+  optional int32 exec_errno = 8;
+  optional string stop_reason = 9;
+  optional uint64 execution_ms = 10;
+  StreamSummary stdout_stream = 11;
+  StreamSummary stderr_stream = 12;
+  // UTF-8 JSON exclusively for the extensible metrics subtree. Keeping JSON
+  // here preserves unsigned 64-bit counters, nulls, and fractional rates.
+  optional bytes metrics_json = 13;
+  optional bool outcome_known = 14;
+  optional uint32 schema_version = 15;
+  // Snapshot summaries omit argv entirely; repeated fields lack presence.
+  bool has_argv = 16;
+  bool has_exit_code_field = 17;
+  bool has_signal_field = 18;
+  bool has_exec_errno_field = 19;
+}
+message StatusResponse {
+  string session_state = 1;
+  CommandRecord current = 2;
+  CommandRecord last = 3;
+  uint64 commands = 4;
+  bytes metrics_json = 5;
+  string run_id = 6;
+  uint32 schema_version = 7;
+  uint32 session_protocol_version = 8;
+}
+message OutputResponse {
+  uint64 offset = 1;
+  uint64 next_offset = 2;
+  bytes data = 3;
+  bool finished = 4;
+}
+message InputResponse { uint64 accepted_bytes = 1; }
+message Acknowledgement {
+  string status = 1;
+  optional bool active = 2;
+  optional bool closed = 3;
+}
+message ArtifactEntry {
+  string path = 1;
+  string type = 2;
+  optional uint64 size = 3;
+  optional string sha256 = 4;
+}
+message WorkspaceResponse {
+  uint64 bytes = 1;
+  repeated ArtifactEntry entries = 2;
+  uint64 entry_count = 3;
+  bool manifest_truncated = 4;
+  optional bool complete = 5;
+  optional string destination = 6;
+}
+message SessionResponse {
+  uint32 protocol_version = 1;
+  oneof outcome {
+    Error error = 2;
+    CommandRecord command = 10;
+    StatusResponse status = 11;
+    Acknowledgement acknowledgement = 12;
+    InputResponse input = 13;
+    OutputResponse output = 14;
+    WorkspaceResponse workspace = 15;
+  }
+}

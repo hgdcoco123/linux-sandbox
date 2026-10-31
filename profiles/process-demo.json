@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "mode": "process",
+  "network": "host",
+  "cwd": "/tmp",
+  "argv": ["/bin/sh", "-c", "printf 'hello from target\n'; printf 'stderr example\n' >&2"],
+  "limits": {"wall_ms": 3000, "grace_ms": 200, "capture_bytes": 1048576}
+}

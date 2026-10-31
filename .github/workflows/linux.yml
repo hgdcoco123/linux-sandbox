@@ -1,0 +1,18 @@
+name: Linux build and behavior checks
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - name: Prepare static fixture runtime
+        run: python3 tools/make_runtime.py --fixture build/sandbox-fixture --output /tmp/sandbox-test-runtime
+      - name: Namespace and cgroup behavior checks in a delegated transient service
+        run: |
+          sudo systemd-run --wait --pipe --collect -p Delegate=yes -p Type=exec \
+            /usr/bin/python3 "${GITHUB_WORKSPACE}/tools/delegated_run.py" \
+            --sandbox "${GITHUB_WORKSPACE}/build/sandbox" --test-runtime /tmp/sandbox-test-runtime

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "max_parallel": 2,
+  "memory_budget_bytes": 134217728,
+  "pids_budget": 64,
+  "tasks": [
+    {"id": "one", "config": {"schema_version": 1, "mode": "process", "network": "host", "cwd": "/tmp", "argv": ["/bin/sh", "-c", "sleep 1; printf 'task one\\n'"], "limits": {"memory_bytes": 67108864, "pids": 32}}},
+    {"id": "two", "config": {"schema_version": 1, "mode": "process", "network": "host", "cwd": "/tmp", "argv": ["/bin/sh", "-c", "sleep 1; printf 'task two\\n'"], "limits": {"memory_bytes": 67108864, "pids": 32}}},
+    {"id": "three", "config": {"schema_version": 1, "mode": "process", "network": "host", "cwd": "/tmp", "argv": ["/bin/true"], "limits": {"memory_bytes": 67108864, "pids": 32}}}
+  ]
+}

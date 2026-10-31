@@ -1,0 +1,7 @@
+# Managed by linux-sandbox deployment tool; not a full confinement policy.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile linux-sandbox-installed-launcher /opt/linux-sandbox/bin/sandbox-launcher flags=(unconfined) {
+    userns,
+}

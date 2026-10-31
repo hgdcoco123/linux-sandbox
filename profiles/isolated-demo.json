@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "mode": "isolated",
+  "runtime_root": "/srv/sandbox/runtime",
+  "cgroup_root": "/sys/fs/cgroup/sandbox-runs",
+  "argv": ["/usr/bin/sandbox-fixture", "files"],
+  "cwd": "/work",
+  "network": "none",
+  "metrics": {"interval_ms": 250, "history_limit": 256},
+  "mounts": [
+    {"source": "/srv/sandbox/input", "target": "/input", "readonly": true},
+    {"source": "/srv/sandbox/output", "target": "/output", "readonly": false}
+  ],
+  "limits": {
+    "memory_bytes": 268435456,
+    "pids": 64,
+    "wall_ms": 3000,
+    "startup_ms": 5000,
+    "grace_ms": 200
+  }
+}

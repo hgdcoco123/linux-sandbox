@@ -1,0 +1,12 @@
+{
+  "async_max_submit_ns": 9100,
+  "async_total_us": 1007566,
+  "backpressure_retries": 48,
+  "queue_peak_bytes": 65536,
+  "sync_max_call_ns": 16473200,
+  "sync_total_us": 1015978,
+  "workload": "64 x 4096 bytes; simulated 1ms sink per write",
+  "host": "Windows, native MinGW g++, controlled sleep sink",
+  "date": "2026-10-30",
+  "linux_execution": false
+}
