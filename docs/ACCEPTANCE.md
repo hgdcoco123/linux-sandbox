@@ -14,6 +14,16 @@ sudo apt-get install -y build-essential cmake libseccomp-dev \
     protobuf-compiler libprotobuf-dev python3-protobuf
 ```
 
+## 0. 一条命令收齐材料
+
+```bash
+bash tools/ubuntu-accept.sh          # 构建 + 测试 + 委派隔离 + 环境信息，打包成 tar.gz
+bash tools/ubuntu-accept.sh --skip-iso   # 只想先看构建与常规测试
+```
+
+脚本不会修改主机（不装包、不改 sysctl、不动 AppArmor），失败也不中断，
+只把每一步的退出码和输出收进一个目录。它最后会打印要回传的文件清单。
+
 ## 2. 构建与常规测试
 
 ```bash
