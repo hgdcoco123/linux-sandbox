@@ -544,6 +544,15 @@ class SessionController {
         result["stop_reason"] = reason_;
         result["errors"] = errors_;
         result["metrics"] = metrics_report();
+        // Retention is policy, and a failed removal is reported rather than
+        // hidden: silently keeping a workspace the caller asked to drop is the
+        // same class of mistake as silently deleting one they wanted.
+        if (!config_.workspace.keep_on_close) {
+            std::error_code failure;
+            fs::remove_all(store_->directory() / "workspace", failure);
+            if (failure)
+                result["cleanup_errors"] = Json::array({failure.message()});
+        }
         records_->close(result);
         execution_.reset();
         server_.reset();
