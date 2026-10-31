@@ -1,4 +1,5 @@
 #pragma once
+#include "sandbox/core/workspace.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -38,6 +39,8 @@ struct RunConfig {
     std::map<std::string, std::string> env{{"PATH", "/usr/bin:/bin"}, {"LANG", "C.UTF-8"}};
     std::vector<MountSpec> mounts;
     Limits limits;
+    // What may enter the sandbox workspace and what survives teardown.
+    WorkspacePolicy workspace;
     std::string mode = "isolated";
     std::string network = "none";
     std::string seccomp = "baseline";

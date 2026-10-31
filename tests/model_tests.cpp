@@ -73,6 +73,41 @@ int main() {
                        RunState::stopping, RunState::finalizing, RunState::finished})
             state.transition(s);
         rejects([&] { state.transition(RunState::running); });
+        // The workspace boundary is configuration, and bad policies are refused
+        // rather than silently clamped.
+        auto with_workspace = j;
+        with_workspace["workspace"] = {{"max_bytes", 1048576},
+                                       {"max_entries", 128},
+                                       {"max_depth", 8},
+                                       {"input", "snapshot_copy"},
+                                       {"keep_on_close", true}};
+        auto parsed_workspace = RunConfig::parse(with_workspace, fs::current_path());
+        parsed_workspace.validate(true);
+        require(parsed_workspace.workspace.max_bytes == 1048576, "workspace max_bytes");
+        require(parsed_workspace.workspace.input == InputMode::snapshot_copy, "workspace input mode");
+        require(parsed_workspace.workspace.keep_on_close, "workspace retention");
+        {
+            auto round = RunConfig::parse(parsed_workspace.to_json(), fs::current_path());
+            require(round.workspace.max_entries == 128, "workspace round-trips");
+        }
+        {
+            auto typo = with_workspace;
+            typo["workspace"]["max_size"] = 1;
+            rejects([&] { RunConfig::parse(typo, fs::current_path()); });
+        }
+        {
+            auto bad_mode = with_workspace;
+            bad_mode["workspace"]["input"] = "copy";
+            rejects([&] { RunConfig::parse(bad_mode, fs::current_path()); });
+        }
+        {
+            auto zero = with_workspace;
+            zero["workspace"]["max_bytes"] = 0;
+            rejects([&] {
+                auto config = RunConfig::parse(zero, fs::current_path());
+                config.validate(true);
+            });
+        }
         RunReport report;
         require(report.json()["exit_code"].is_null(), "missing exit must be null");
         report.exit_code = 0;

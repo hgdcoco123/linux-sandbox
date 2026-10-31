@@ -50,9 +50,16 @@ seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-s
 `core/workspace` 已给出策略类型与 `admit()` 决策函数（预算、结构拒绝、优先级、溢出安全），
 并有 `workspace_tests` 覆盖。**尚未接线**：
 
-- `RunConfig` 增加 `workspace` 段并解析成 `WorkspacePolicy`（未知字段拒绝、越界拒绝）
+已完成：
+
+- `RunConfig` 的 `workspace` 段可配置并被校验（未知字段、未知 input 模式、零预算都拒绝），
+  `to_json` 回写，`model_tests` 覆盖往返与拒绝路径
+
+仍待做：
+
 - `src/storage/artifacts.cpp` 的复制循环改用 `admit()`，替换写死的 4096 项 / 256MiB
 - 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败进 `CleanupResult`
+- `/input` 的 `snapshot_copy` 模式尚未实现（当前仍是只读绑定）
 - `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化。
 - 会话路径的 `sessions.py` 等集成测试未更新，当前仓库状态下这些用例不可用。
 

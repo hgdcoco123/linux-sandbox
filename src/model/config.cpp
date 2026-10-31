@@ -1,4 +1,5 @@
 #include "sandbox/config.hpp"
+#include <stdexcept>
 #include <fstream>
 #include <set>
 #include <stdexcept>
@@ -55,7 +56,7 @@ RunConfig RunConfig::load(const fs::path &file) {
 RunConfig RunConfig::parse(const Json &j, const fs::path &base) {
     require_keys(j,
                  {"schema_version", "argv", "runtime_root", "cwd", "stdin_file", "env", "mounts",
-                  "limits", "mode", "network", "seccomp", "cgroup_root", "metrics", "session"},
+                  "limits", "mode", "network", "seccomp", "cgroup_root", "metrics", "session", "workspace"},
                  "config");
     if (!j.contains("schema_version") || j.at("schema_version") != 1)
         throw std::runtime_error("schema_version must be 1");
@@ -101,9 +102,32 @@ RunConfig RunConfig::parse(const Json &j, const fs::path &base) {
     c.metrics.interval_ms = numeric(sampling, "interval_ms", c.metrics.interval_ms, 10000);
     c.metrics.history_limit =
         static_cast<std::size_t>(numeric(sampling, "history_limit", c.metrics.history_limit, 1024));
+    const auto workspace = j.value("workspace", Json::object());
+    require_keys(workspace, {"max_bytes", "max_entries", "max_depth", "input", "keep_on_close"},
+                 "workspace");
+    auto &w = c.workspace;
+    w.max_bytes = numeric(workspace, "max_bytes", w.max_bytes, 1ULL << 40);
+    w.max_entries =
+        static_cast<std::uint32_t>(numeric(workspace, "max_entries", w.max_entries, 1u << 20));
+    w.max_depth = static_cast<std::uint8_t>(numeric(workspace, "max_depth", w.max_depth, 255));
+    if (workspace.contains("input")) {
+        const auto input = workspace.at("input").get<std::string>();
+        if (input == "bind_readonly")
+            w.input = InputMode::bind_readonly;
+        else if (input == "snapshot_copy")
+            w.input = InputMode::snapshot_copy;
+        else
+            throw std::runtime_error("workspace.input must be bind_readonly or snapshot_copy");
+    }
+    w.keep_on_close = workspace.value("keep_on_close", w.keep_on_close);
     return c;
 }
 void RunConfig::validate(bool allow_process) const {
+    try {
+        workspace.validate();
+    } catch (const std::invalid_argument &e) {
+        throw std::runtime_error(std::string("workspace: ") + e.what());
+    }
     if (!session_ms || !idle_ms || session_ms > 86400000 || idle_ms > session_ms)
         throw std::runtime_error("session requires 0 < idle_ms <= total_ms <= 86400000");
     if (metrics.interval_ms < 50 || metrics.interval_ms > 10000 || metrics.history_limit == 0 ||
@@ -198,6 +222,12 @@ Json RunConfig::to_json() const {
             {"cgroup_root", cgroup_root.string()},
             {"metrics",
              {{"interval_ms", metrics.interval_ms}, {"history_limit", metrics.history_limit}}},
+            {"workspace",
+             {{"max_bytes", workspace.max_bytes},
+              {"max_entries", workspace.max_entries},
+              {"max_depth", workspace.max_depth},
+              {"input", input_mode_name(workspace.input)},
+              {"keep_on_close", workspace.keep_on_close}}},
             {"limits",
              {{"memory_bytes", l.memory_bytes},
               {"swap_bytes", l.swap_bytes},
