@@ -1,5 +1,10 @@
 # 当前实现架构（与源码对应）
 
+> **重构中（0.6）**：执行路径现由 `core/supervisor`（事件→动作）、`core/prepare`（步骤与回滚）
+> 和 `core/control`（类型化控制消息）驱动；下文关于 `Message{Json}` 与
+> `RunSession::request_stop` 式判定的描述属于历史实现。当前状态见 [REDESIGN.md](REDESIGN.md)
+> 与 [REMAINING.md](REMAINING.md)。
+>
 > 本文保留前版结构/原理。0.5 的类型模型、输出线程、事件循环、批次调度以 [TASK_ENGINE.md](TASK_ENGINE.md) 为准；当前学习路线见 [LEARNING_ROUTE.md](LEARNING_ROUTE.md)。
 
 > 0.4 核心结构更新以 [CORE_STRUCTURE.md](CORE_STRUCTURE.md) 为准；学习顺序见 [LEARNING_ROUTE.md](LEARNING_ROUTE.md)。下文保留原有隔离原理与功能说明。

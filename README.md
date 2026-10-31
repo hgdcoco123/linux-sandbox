@@ -1,5 +1,20 @@
 # Linux 程序沙箱
 
+## 0.6 内部重构（进行中）
+
+按"把沙箱当作独立执行系统重新组织内部结构"的目标，正在替换旧的 JSON 转发层：
+
+- `include/sandbox/core/` 是一层新的、不依赖 JSON 的业务内核：类型化 ID 与请求、
+  结果三分（outcome / output / cleanup）、执行核心（事件进、动作出）、准备步骤与逆序回滚、
+  控制消息与 FD 契约、二进制编解码、workspace 边界。
+- 控制通道（launcher/init）已完全类型化，不再有 `Message{Json}`。
+- 单次执行（`run`）已接到新执行核心与准备序列上；会话与批次仍在旧模型上。
+
+**先读 [重构设计](docs/REDESIGN.md)，再读 [剩余工作与验证边界](docs/REMAINING.md)。**
+本机可复现的验证（可移植测试 + 交叉编译 + 链接）见 `tools/cross-verify.ps1`。
+
+**注意：本仓库状态下没有任何 Linux 运行时行为被验证过。** 交叉编译与链接只能证明
+类型、接口与符号自洽；namespace、cgroup、seccomp、信号时序必须在真实 Linux 上验收。
 ## 0.5 本机任务执行引擎
 
 新增类型化命令模型、有界输出写入队列与工作线程、共享 epoll 等待入口，以及 FIFO/资源预算限制的独立任务批次。
