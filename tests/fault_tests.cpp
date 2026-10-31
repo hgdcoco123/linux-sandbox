@@ -1,6 +1,7 @@
 // Fault-boundary tests: the cases that must be *rejected* rather than
 // tolerated. Each section drives one boundary into its failure modes.
 #include "sandbox/core/control.hpp"
+#include "sandbox/core/ops_json.hpp"
 #include "sandbox/core/prepare.hpp"
 #include "sandbox/core/record_json.hpp"
 #include "sandbox/core/supervisor.hpp"
@@ -166,6 +167,61 @@ void test_supervisor_ordering() {
     }
 }
 
+// The JSON adapter is the only place untrusted text becomes a business object,
+// so it is driven with truncations and bit flips: it must always answer
+// (request or reason) and never throw.
+void test_request_adapter_robustness() {
+    using Json = nlohmann::json;
+    const auto text = Json{{"op", "execute"},
+                           {"argv", {"/bin/echo", "hi"}},
+                           {"cwd", "/work"},
+                           {"env", {{"LANG", "C.UTF-8"}}},
+                           {"wall_ms", 1500},
+                           {"request_id", "req-1"}}
+                          .dump();
+
+    for (std::size_t length = 0; length < text.size(); ++length) {
+        const auto prefix = text.substr(0, length);
+        auto document = Json::parse(prefix, nullptr, false);
+        if (document.is_discarded())
+            continue; // not JSON at all: nothing for the adapter to answer
+        std::string error;
+        try {
+            auto request = session_request_from_json(document, error);
+            if (!request && error.empty()) {
+                std::printf("FAIL: prefix %zu rejected without a reason\n", length);
+                ++failures;
+                return;
+            }
+        } catch (const std::exception &failure) {
+            std::printf("FAIL: prefix %zu threw: %s\n", length, failure.what());
+            ++failures;
+            return;
+        }
+    }
+    // Every prefix was either discarded as invalid JSON or answered; the point is
+    // that none of them threw or returned a rejection without a reason.
+
+    for (std::size_t position = 0; position < text.size(); ++position) {
+        auto mutated = text;
+        mutated[position] = static_cast<char>(mutated[position] ^ 0x01);
+        auto document = Json::parse(mutated, nullptr, false);
+        std::string error;
+        try {
+            auto request = session_request_from_json(document, error);
+            if (!request && error.empty()) {
+                std::printf("FAIL: mutated byte %zu rejected without a reason\n", position);
+                ++failures;
+                return;
+            }
+        } catch (const std::exception &failure) {
+            std::printf("FAIL: mutated byte %zu threw: %s\n", position, failure.what());
+            ++failures;
+            return;
+        }
+    }
+}
+
 void test_record_boundaries() {
     std::string error;
     // Truncated JSON text, wrong types and unknown fields.
@@ -214,6 +270,7 @@ int main() {
     test_wire_boundaries();
     test_control_boundaries();
     test_supervisor_ordering();
+    test_request_adapter_robustness();
     test_record_boundaries();
     test_prepare_undo_failures();
     if (failures != 0) {
