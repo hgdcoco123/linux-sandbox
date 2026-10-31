@@ -70,6 +70,22 @@ systemd-run --user --wait --pipe --collect -p Delegate=yes -p Type=exec \
 | `src/runtime/init_common.cpp` 准备顺序 | 挂载 EPERM/EINVAL，`ENV_READY` 从未到达 | `internal.log`；`prepare` 阶段的最后一条 |
 | `src/storage/artifacts.cpp` 策略 | 上传/导出报 `entry_limit` / `byte_limit`，即使文件很小 | 请求里的 `workspace` 段是否被配置覆盖 |
 | `core/prepare` 回滚 | 准备失败后残留 cgroup 或挂载点 | `/sys/fs/cgroup` 下是否有 `sbx-*` 残留 |
+| 结果裁定链 | `run` 打印 `summary=success` 但退出码是 **125**；或批次任务由 completed 变 failed，原因写着 `task environment not reclaimed: cleanup_incomplete` | 这是新加的判定链：`summary` 只说目标结果，`verdict` 说环境是否可信，退出码跟 verdict。先看 `cleanup.errors` 与 `stdout.eof/flushed` |
+
+## 5.5 新增的判定链（容易误读）
+
+```text
+summary  目标进程做了什么        success / timeout / cancelled / nonzero_exit …
+verdict  这棵树值不值得信        ok / target_failed / harness_error / cleanup_incomplete
+exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
+```
+
+三者的关系是**刻意分开**的：目标退出 0 而清理没走完时，`summary=success`、
+`verdict=cleanup_incomplete`、退出码 `125`。批次里同样的任务会被判成 failed，
+错误信息是 `task environment not reclaimed: cleanup_incomplete`。
+
+看到这种组合不要当成"报告自相矛盾"，它正是设计意图；要查的是**为什么清理没走完**
+（通常是 `core/supervisor` 的完成条件没被满足：后代未清空或某条输出没有 EOF+落盘）。
 
 ## 6. 已知未覆盖
 
