@@ -274,6 +274,12 @@ Json run_batch(BatchSpec spec, const fs::path &state, const fs::path &binary,
                     terminal = TaskState::completed;
                 else if (summary == "cancelled")
                     terminal = TaskState::cancelled;
+                // A task whose target succeeded but whose environment was not
+                // reclaimed is not a completed task, even though the child's
+                // summary says success.
+                const auto verdict = data[i].report.value("verdict", std::string("ok"));
+                if (terminal == TaskState::completed && verdict != "ok")
+                    throw std::runtime_error("task environment not reclaimed: " + verdict);
                 if (!WIFEXITED(status))
                     throw std::runtime_error("task supervisor terminated by signal");
                 // Success report with failing supervisor exit is not success.
