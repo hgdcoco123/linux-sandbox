@@ -549,12 +549,25 @@ void RunSession::finalize() {
     report_.summary = summary_of(result.outcome);
     report_.verdict = verdict_name(verdict_of(result));
     report_.stop_reason = stop_reason_of(result.outcome);
+    // The core only fills the timing when it reaches a conclusion. On a forced
+    // shutdown it does not, so fall back to wall clock rather than reporting a
+    // run that took 0 ms.
+    auto total = std::chrono::duration_cast<Millis>(result.timing.total);
+    if (total.count() == 0) {
+        const auto elapsed = static_cast<std::int64_t>(monotonic_ms()) -
+                             static_cast<std::int64_t>(started_);
+        total = Millis{elapsed > 0 ? elapsed : 0};
+    }
+    auto execution = std::chrono::duration_cast<Millis>(result.timing.execution);
+    if (execution.count() == 0) {
+        const auto startup = std::chrono::duration_cast<Millis>(result.timing.startup);
+        const auto derived = total - startup;
+        execution = derived.count() > 0 ? derived : Millis{0};
+    }
     report_.startup_ms =
         static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.startup).count());
-    report_.execution_ms = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<Millis>(result.timing.execution).count());
-    report_.total_ms =
-        static_cast<std::uint64_t>(std::chrono::duration_cast<Millis>(result.timing.total).count());
+    report_.execution_ms = static_cast<std::uint64_t>(execution.count());
+    report_.total_ms = static_cast<std::uint64_t>(total.count());
     report_.descendants_empty = report_.descendants_empty || result.cleanup.descendants_gone;
     report_.cgroup_removed = report_.cgroup_removed || result.cleanup.cgroup_removed;
     for (const auto &failure : result.cleanup.failures)
