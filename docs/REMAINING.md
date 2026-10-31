@@ -73,6 +73,10 @@ powershell -ExecutionPolicy Bypass -File tools/cross-verify.ps1 `
 三段：可移植测试 → 41 个 Linux 翻译单元交叉编译 → 链接 `sandbox` 与 `sandbox-launcher`。
 第三步是关键：逐文件编译通过仍可能留下未定义或重复符号，链接才证明整棵树自洽。
 
+## 实机验收
+
+按 [ACCEPTANCE.md](ACCEPTANCE.md) 执行；里面同时列出了"最可能出问题的地方"和失败时要回传的材料。
+
 ## 真实性声明'
 
 交叉编译只能证明类型与接口正确。死锁、竞态、信号时序、cgroup 行为、seccomp 策略

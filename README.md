@@ -10,7 +10,7 @@
 - 控制通道（launcher/init）已完全类型化，不再有 `Message{Json}`。
 - 单次执行（`run`）已接到新执行核心与准备序列上；会话与批次仍在旧模型上。
 
-**先读 [重构设计](docs/REDESIGN.md)，再读 [剩余工作与验证边界](docs/REMAINING.md)。**
+**先读 [重构设计](docs/REDESIGN.md)、[剩余工作与验证边界](docs/REMAINING.md)，实机验收按 [验收手册](docs/ACCEPTANCE.md)。**
 本机可复现的验证（可移植测试 + 交叉编译 + 链接）见 `tools/cross-verify.ps1`。
 
 **注意：本仓库状态下没有任何 Linux 运行时行为被验证过。** 交叉编译与链接只能证明
