@@ -26,6 +26,8 @@
 下一步是把 `interactive_session::handle(const Json&)` 换成 `handle(const SessionRequest&)`,
 这一步才需要动 `SessionStore` 与旧 `ExecuteRequest`。
 
+**执行顺序与红线见 [MIGRATION_SESSION.md](MIGRATION_SESSION.md)。**
+
 原始范围：
 
 `interactive_session.cpp` 仍以 `Json` 为业务对象。要完成它必须同时替换旧模型，因为
