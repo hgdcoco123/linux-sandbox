@@ -15,6 +15,10 @@
 | 故障边界矩阵 | `tests/fault_tests` | 截断/位翻转/乱序/损坏记录 |
 | 单次执行接线（核心 + 准备序列 + 类型化控制通道） | `runtime/run_session`,`protocol`,`init`,`apps/launcher` | 39/39 交叉编译 |
 | 报告不再把清理失败并入 host_error | `model/report` | `model_tests` |
+| 报告新增 `verdict`，退出码跟随 verdict（清理不完整 → 125） | `model/report`、`runtime/run_session` | `model_tests` |
+| 批次任务按子运行的 `verdict` 判定，不再只看 `summary` | `runtime/batch` | 交叉编译 + 链接 |
+| OOM 在报告层保留优先级（仅对"结局不明/被信号"的运行） | `runtime/run_session` | 交叉编译 + 链接 |
+| 强制收尾时计时兜底为墙钟，不再报 0ms | `runtime/run_session` | 交叉编译 + 链接 |
 
 ## 未完成
 
@@ -87,6 +91,15 @@ powershell -ExecutionPolicy Bypass -File tools/cross-verify.ps1 `
 ## 实机验收
 
 按 [ACCEPTANCE.md](ACCEPTANCE.md) 执行；里面同时列出了"最可能出问题的地方"和失败时要回传的材料。
+
+## 交接要点（给下一个人）
+
+1. 先读 `docs/MIGRATION_SESSION.md`（会话路径迁移的顺序与红线），再动代码
+2. 先跑 `tools/cross-verify.ps1` 确认起点是绿的；它证明不了运行时行为
+3. 报告字段有三个层次：`summary`（目标）、`verdict`（环境可否信任）、`exit`（调用方是否继续）；
+   任何"改了一个字段含义"的改动，都要把所有读取方（CLI、批次、SDK、测试）逐一核对一遍——
+   这条在 38 轮里触发过 4 次真实缺陷
+4. 修改报告/事件的"适配层"时注意语句顺序：覆盖写在赋值之前等于没写（同一类问题出现过一次）
 
 ## 真实性声明'
 
