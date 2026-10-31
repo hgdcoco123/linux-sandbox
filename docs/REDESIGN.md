@@ -72,6 +72,19 @@ struct ExecutionResult {
 3. **准备阶段失败是立即完成**：什么都没启动，就没有输出可等、没有后代可收，
    `StartupFailed` 会明确写下这一点，而不是让调用方等一个永远不会到来的 EOF。
 
+## 3.7 准备步骤与回滚
+
+`core/prepare.hpp`：`PrepareSequence` 接收有序的 `{step, apply, undo}`，按序执行，
+任一步抛异常就**按逆序撤销已完成的前缀**。
+
+- 顺序是类型的一部分：`PrepareStep` 的枚举值就是依赖顺序，注册时乱序/重复/缺 action 直接
+  `std::invalid_argument`——准备顺序写错是编程错误，不是运行时状况。
+- **失败的那一步不撤销**：它没有完成，撤什么是它自己的责任；journal 不猜。
+- **撤销失败不中断后续撤销**：每次都尝试，失败写进 `rollback_failures` 并带上所属
+  `CleanupStage`，否则会把后面的资源留在系统里。
+- 允许稀疏序列：process 后端没有 cgroup / id_map，序列里不出现这些步骤即可。
+- `describe()` 给出一行可读结论，直接进日志与报告。
+
 ## 4. 仍然沿用的决定
 - 单次执行与会话共享执行语义，但**生命周期不同**：单次执行结束即回收环境，会话保留 init 与 workspace。
 - 停止流程只有一条：记录原因 → 停止受理输入 → 请求退出 → 宽限期 → 强制终止 → 确认集合为空 → 收尾输出 → 落盘。取消与超时只是入口不同。
@@ -86,7 +99,7 @@ struct ExecutionResult {
 | P2 | 类型化会话请求/响应 + 二进制控制报文（`core/ops.hpp`、`core/wire.hpp`） | `[完成]` 模型与编解码；控制器接线在 P3 |
 | P3 | 统一执行核心 `core/supervisor`（事件→动作，纯逻辑） | `[完成]` 核心与测试；两个控制器的接线在 P3.5 |
 | P3.5 | `RunSession`/`SessionController` 接入执行核心 | `[待做]` |
-| P4 | 准备步骤 journal + 逆序回滚，产出 `CleanupResult` | `[待做]` |
+| P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
 | P6 | 控制通道消息类型化，FD 契约按消息类型声明 | `[待做]` |
 | P7 | 批次调度改用同一执行核心 | `[待做]` |
