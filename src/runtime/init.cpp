@@ -1,3 +1,4 @@
+#include "sandbox/init_common.hpp"
 #include "sandbox/isolation.hpp"
 #include "sandbox/protocol.hpp"
 #include <array>
@@ -68,18 +69,9 @@ int init_main(const RunConfig &config, const fs::path &root) {
     bool main_reaped = false;
     bool isolated = config.mode == "isolated";
     try {
-        checked(::prctl(PR_SET_PDEATHSIG, SIGKILL), "init parent death");
-        if (!isolated)
-            checked(::prctl(PR_SET_CHILD_SUBREAPER, 1), "init subreaper");
+        arm_init(isolated);
         expect(control, ControlKind::prepare);
-        if (isolated)
-            RootfsBuilder::build(config, root);
-        else
-            close_from(6);
-        SecurityPolicy::drop_capabilities();
-        checked(::prctl(PR_SET_DUMPABLE, 0), "protect init");
-        // Restore after credentials/capability preparation; behavior is covered by crash tests.
-        checked(::prctl(PR_SET_PDEATHSIG, SIGKILL), "init parent death after setup");
+        prepare_environment(config, root);
         sigset_t mask;
         ::sigemptyset(&mask);
         ::sigaddset(&mask, SIGCHLD);

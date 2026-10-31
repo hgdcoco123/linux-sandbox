@@ -1,3 +1,4 @@
+#include "sandbox/init_common.hpp"
 #include "sandbox/isolation.hpp"
 #include "sandbox/protocol.hpp"
 #include <cerrno>
@@ -48,9 +49,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
     ControlChannel control{UniqueFd(5)};
     bool isolated = config.mode == "isolated";
     try {
-        checked(::prctl(PR_SET_PDEATHSIG, SIGKILL), "session parent death");
-        if (!isolated)
-            checked(::prctl(PR_SET_CHILD_SUBREAPER, 1), "session subreaper");
+        arm_init(isolated);
         auto prepare = control.receive();
         if (prepare && std::holds_alternative<Stop>(prepare->message)) {
             control.send(InitDone{});
@@ -58,13 +57,7 @@ int persistent_init(const RunConfig &config, const fs::path &root) {
         }
         if (!prepare || sandbox::kind_of(prepare->message) != ControlKind::prepare)
             throw std::runtime_error("expected PREPARE");
-        if (isolated)
-            RootfsBuilder::build(config, root);
-        else
-            close_from(6);
-        SecurityPolicy::drop_capabilities();
-        checked(::prctl(PR_SET_DUMPABLE, 0), "session dumpable");
-        checked(::prctl(PR_SET_PDEATHSIG, SIGKILL), "session parent death after setup");
+        prepare_environment(config, root);
         ::close(0);
         ::close(1);
         ::close(2);

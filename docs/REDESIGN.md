@@ -169,7 +169,7 @@ launcher 步骤的撤销是 `LauncherClient::abort()`。
 | P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` 见 REMAINING.md |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P4.5 | `RunSession` 用准备序列执行并在失败时逆序回滚 | `[完成]` |
-| P5 | 合并 `init.cpp` 与 `persistent_init.cpp` 为一个 init | `[待做]` |
+| P5 | 合并两个 init | `[进行中]` 环境准备已共享（`init_common`）；命令循环仍分两份 |
 | P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` |
 | P6.5 | `protocol.cpp`/launcher/init/会话/runsession 全部改用 `ControlMessage` | `[完成]` 控制通道已无 JSON |
 | P7 | 批次调度改用同一执行核心 | `[待做]` |

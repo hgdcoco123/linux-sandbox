@@ -118,9 +118,9 @@ struct InitError {
 // decision: the controller still decides the outcome.
 struct CommandDone {
     CommandIndex command;
-    std::optional<int> exit_code;
-    std::optional<int> signal;
-    std::optional<int> exec_errno;
+    std::optional<int> exit_code{};
+    std::optional<int> signal{};
+    std::optional<int> exec_errno{};
     CommandStop stop = CommandStop::main_exit;
     std::chrono::milliseconds elapsed{0};
 };
