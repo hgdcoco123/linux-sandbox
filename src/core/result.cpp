@@ -47,8 +47,10 @@ Verdict verdict_of(const ExecutionResult &result) noexcept {
         std::holds_alternative<Indeterminate>(result.outcome.variant()))
         return Verdict::harness_error;
     // A target that exited 0 but left resources behind is neither a success nor
-    // a target failure; it gets its own verdict.
-    if (!result.cleanup.complete())
+    // a target failure; it gets its own verdict. Incomplete output counts: bytes
+    // that never reached the sink, or a writer that failed, mean the report
+    // cannot be trusted even when the exit status can.
+    if (!result.cleanup.complete() || !result.out.complete() || !result.err.complete())
         return Verdict::cleanup_incomplete;
     if (result.target_succeeded())
         return Verdict::ok;

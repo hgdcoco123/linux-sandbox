@@ -124,6 +124,8 @@ ExecutionResult make_result(ExecutionOutcome outcome, bool clean) {
     result.outcome = std::move(outcome);
     result.out.eof = true;
     result.out.flushed = true;
+    result.err.eof = true;
+    result.err.flushed = true;
     result.cleanup.descendants_gone = true;
     result.cleanup.launcher_reaped = true;
     result.cleanup.init_reaped = true;
@@ -150,6 +152,23 @@ void test_result_separation() {
 
     auto unknown = make_result(ExecutionOutcome(Indeterminate{"reaped by supervisor"}), true);
     check(verdict_of(unknown) == Verdict::harness_error, "indeterminate is a harness error");
+
+    // Output that never reached the sink must not be reported as a clean run,
+    // even though the target itself exited 0.
+    auto unflushed = make_result(ExecutionOutcome(Exited{0}), true);
+    unflushed.out.eof = true;
+    unflushed.out.flushed = false;
+    check(verdict_of(unflushed) == Verdict::cleanup_incomplete,
+          "an unflushed stream makes the verdict cleanup_incomplete");
+    check(outcome_exit_code(unflushed.outcome) == 0,
+          "an unflushed stream still does not rewrite the target exit code");
+
+    auto write_failed = make_result(ExecutionOutcome(Exited{0}), true);
+    write_failed.err.eof = true;
+    write_failed.err.flushed = true;
+    write_failed.err.failed_bytes = 7;
+    check(verdict_of(write_failed) == Verdict::cleanup_incomplete,
+          "failed output bytes make the verdict cleanup_incomplete");
 
     OutputResult partial;
     partial.eof = true;
