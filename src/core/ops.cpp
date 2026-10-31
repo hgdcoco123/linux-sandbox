@@ -17,23 +17,23 @@ const char *stream_name(Stream stream) noexcept {
     return "unknown";
 }
 
-const char *session_state_name(SessionState state) noexcept {
+const char *session_phase_name(SessionPhase state) noexcept {
     switch (state) {
-    case SessionState::created:
+    case SessionPhase::created:
         return "created";
-    case SessionState::preparing:
+    case SessionPhase::preparing:
         return "preparing";
-    case SessionState::idle:
+    case SessionPhase::idle:
         return "idle";
-    case SessionState::running:
+    case SessionPhase::running:
         return "running";
-    case SessionState::draining:
+    case SessionPhase::draining:
         return "draining";
-    case SessionState::closing:
+    case SessionPhase::closing:
         return "closing";
-    case SessionState::closed:
+    case SessionPhase::closed:
         return "closed";
-    case SessionState::failed:
+    case SessionPhase::failed:
         return "failed";
     }
     return "unknown";

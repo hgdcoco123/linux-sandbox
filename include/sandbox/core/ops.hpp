@@ -21,8 +21,8 @@ namespace sandbox {
 enum class Stream { standard_output, standard_error };
 const char *stream_name(Stream) noexcept;
 
-enum class SessionState { created, preparing, idle, running, draining, closing, closed, failed };
-const char *session_state_name(SessionState) noexcept;
+enum class SessionPhase { created, preparing, idle, running, draining, closing, closed, failed };
+const char *session_phase_name(SessionPhase) noexcept;
 
 // A single stdin write is bounded by the control message size, not by memory.
 inline constexpr std::size_t max_stdin_chunk = 4096;
@@ -111,7 +111,7 @@ struct CommandStatus {
 };
 
 struct SessionStatus {
-    SessionState state = SessionState::created;
+    SessionPhase state = SessionPhase::created;
     std::optional<CommandIndex> current;
     std::uint32_t completed_commands = 0;
 };

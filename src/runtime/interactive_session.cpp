@@ -1,4 +1,5 @@
 #include "sandbox/command_execution.hpp"
+#include "sandbox/core/ops_json.hpp"
 #include "sandbox/event_loop.hpp"
 #include "sandbox/interactive.hpp"
 #include "sandbox/session.hpp"
@@ -259,7 +260,17 @@ class SessionController {
             lifecycle_.require_idle();
             if (config_.mode != "isolated")
                 throw SessionError("POLICY_DENIED", "managed files require isolated mode");
-            return workspace_->handle(j.at("request"));
+            // Decode once at the boundary: the service then receives a typed
+            // operation instead of the client's wire shape.
+            std::string error;
+            auto decoded = session_request_from_json(
+                Json{{"op", "files"}, {"request", j.at("request")}}, error);
+            if (!decoded)
+                throw SessionError("INVALID_REQUEST", error);
+            const auto *operation = decoded->as<Workspace>();
+            if (!operation)
+                throw SessionError("INVALID_REQUEST", "expected a workspace operation");
+            return workspace_->handle(*operation);
         }
         throw std::runtime_error("unknown session operation");
     }

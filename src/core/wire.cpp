@@ -1,4 +1,4 @@
-﻿#include "sandbox/core/wire.hpp"
+#include "sandbox/core/wire.hpp"
 
 #include "sandbox/core/binary.hpp"
 #include "sandbox/core/record_json.hpp"
@@ -459,7 +459,7 @@ SessionReply decode_reply(std::string_view packet) {
                 fail("BAD_WIRE_PACKET", "invalid command index");
             current = *index;
         }
-        reply = SessionStatus{static_cast<SessionState>(state), current,
+        reply = SessionStatus{static_cast<SessionPhase>(state), current,
                               static_cast<std::uint32_t>(reader.varint())};
         break;
     }

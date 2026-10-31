@@ -1,5 +1,8 @@
 #include "sandbox/workspace_service.hpp"
+#include "sandbox/core/ops_json.hpp"
 #include "sandbox/interactive.hpp"
+#include <variant>
+
 namespace sandbox {
 Json WorkspaceService::handle(const Json &request) {
     auto publish = [&](const Json &request) {
@@ -46,5 +49,21 @@ Json WorkspaceService::handle(const Json &request) {
                         {"destination", req.at("destination")}});
     }
     throw SessionError("INVALID_REQUEST", "unknown session file operation");
+}
+Json WorkspaceService::handle(const Workspace &operation) {
+    Json request;
+    std::visit(
+        [&request](const auto &value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, WorkspaceSnapshot>) {
+                request = {{"op", "snapshot"}, {"source", value.source}, {"name", value.name}};
+            } else if constexpr (std::is_same_v<T, WorkspaceManifest>) {
+                request = {{"op", "manifest"}};
+            } else {
+                request = {{"op", "export"}, {"destination", value.destination}};
+            }
+        },
+        operation.operation);
+    return handle(request);
 }
 } // namespace sandbox

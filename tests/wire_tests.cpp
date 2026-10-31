@@ -114,9 +114,9 @@ void test_reply_round_trip() {
         CommandStatus{*CommandIndex::from_number(1), true, ExecutionOutcome(Indeterminate{"lost"})},
         "command indeterminate");
 
-    check_reply_round_trip(SessionStatus{SessionState::idle, std::nullopt, 4}, "session idle");
+    check_reply_round_trip(SessionStatus{SessionPhase::idle, std::nullopt, 4}, "session idle");
     check_reply_round_trip(
-        SessionStatus{SessionState::running, *CommandIndex::from_number(5), 4}, "session running");
+        SessionStatus{SessionPhase::running, *CommandIndex::from_number(5), 4}, "session running");
 
     ManifestReply manifest;
     manifest.entries.push_back({"a/b.txt", 12, false});
