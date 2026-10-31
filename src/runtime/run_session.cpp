@@ -16,6 +16,12 @@
 
 namespace sandbox {
 namespace {
+bool result_unknown_or_signaled(const ExecutionOutcome &outcome) {
+    return outcome.term_signal().has_value() ||
+           std::holds_alternative<Indeterminate>(outcome.variant()) ||
+           std::holds_alternative<SupervisionFailed>(outcome.variant());
+}
+
 Millis now_ms() {
     return Millis{static_cast<std::int64_t>(monotonic_ms())};
 }
@@ -547,6 +553,12 @@ void RunSession::finalize() {
     report_.exit_code = result.outcome.exit_code();
     report_.term_signal = result.outcome.term_signal();
     report_.summary = summary_of(result.outcome);
+    // OOM is discovered after the fact from cgroup counters, so by the time it is
+    // known the core has usually already sealed a SIGKILL as "signaled". The old
+    // report gave the memory controller precedence over an otherwise unexplained
+    // kill; keep that, but never relabel a target that exited on its own.
+    if (oom && result_unknown_or_signaled(result.outcome))
+        report_.summary = "oom";
     report_.verdict = verdict_name(verdict_of(result));
     report_.stop_reason = stop_reason_of(result.outcome);
     // The core only fills the timing when it reaches a conclusion. On a forced
