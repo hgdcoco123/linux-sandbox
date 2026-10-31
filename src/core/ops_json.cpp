@@ -61,11 +61,16 @@ bool optional_command(const Json &object, std::optional<CommandIndex> &out, std:
 }
 } // namespace
 
-std::optional<SessionRequest> session_request_from_json(const Json &request, std::string &error) {
-    if (!request.is_object()) {
+std::optional<SessionRequest> session_request_from_json(const Json &input, std::string &error) {
+    if (!input.is_object()) {
         error = "request must be an object";
         return std::nullopt;
     }
+    // protocol_version is envelope metadata from the wire layer, not part of the
+    // business request; it is accepted and dropped here so callers do not have to
+    // strip it before every call.
+    Json request = input;
+    request.erase("protocol_version");
     if (!request.contains("op") || !request.at("op").is_string()) {
         error = "missing op";
         return std::nullopt;

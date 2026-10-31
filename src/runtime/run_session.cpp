@@ -26,11 +26,18 @@ Millis now_ms() {
     return Millis{static_cast<std::int64_t>(monotonic_ms())};
 }
 
-SupervisionLimits core_limits(const Limits &limits) {
+SupervisionLimits core_limits(const RunConfig &config) {
+    const auto &limits = config.limits;
+    const auto &options = config;
     SupervisionLimits core;
     core.startup = Millis{static_cast<std::int64_t>(limits.startup_ms)};
     core.wall = Millis{static_cast<std::int64_t>(limits.wall_ms)};
-    core.grace = Millis{static_cast<std::int64_t>(limits.grace_ms)};
+    // The diagnostic backend has no cgroup to kill: init escalates to SIGKILL on
+    // its own after grace_ms, and it needs room to do that before the supervisor
+    // takes the init process down. The isolated backend can kill the whole group
+    // immediately, so it keeps the plain grace period.
+    const auto extra = options.mode == "isolated" ? 0 : 1000;
+    core.grace = Millis{static_cast<std::int64_t>(limits.grace_ms) + extra};
     // Drain and settle are supervision allowances, not user policy: they bound
     // how long we keep waiting for facts that should already be on their way.
     core.drain = Millis{5000};
@@ -133,7 +140,7 @@ void RunSession::mark_stopping() {
 }
 
 void RunSession::prepare() {
-    core_ = std::make_unique<ExecutionCore>(core_limits(config_.limits), now_ms());
+    core_ = std::make_unique<ExecutionCore>(core_limits(config_), now_ms());
     store_ = RunStore::create(state_root_, config_);
     report_.id = store_->id();
     report_.isolated = config_.mode == "isolated";
