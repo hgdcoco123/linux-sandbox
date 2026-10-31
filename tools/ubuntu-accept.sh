@@ -13,11 +13,12 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/acceptance-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"
 log() { printf '%s\n' "$*" | tee -a "$out/summary.txt"; }
-run() { # run <name> <command...>: capture output, record the exit code
+run() { # run <name> <command...>: capture output, show it live, record the code
     local name=$1; shift
-    "$@" >>"$out/$name.txt" 2>&1
-    local code=$?
-    printf '%-24s exit=%s\n' "$name" "$code" >>"$out/summary.txt"
+    printf '\n== %s\n' "$name"
+    "$@" 2>&1 | tee -a "$out/$name.txt"
+    local code=${PIPESTATUS[0]}
+    printf '%-24s exit=%s\n' "$name" "$code" | tee -a "$out/summary.txt"
     return 0
 }
 
