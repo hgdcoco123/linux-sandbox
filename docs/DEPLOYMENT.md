@@ -11,6 +11,14 @@
 该系统 apparmor_restrict_unprivileged_userns=1、unprivileged_userns_clone=1；尚无审计日志确认具体拒绝来源。
 用户没有添加任何建议的 AppArmor 配置，本次项目修改也不会添加。
 
+**后续（同一台机器、用户临时放开该开关之后）**：`sudo sysctl -w
+kernel.apparmor_restrict_unprivileged_userns=0` 之后 `tools/delegated_run.py` 全绿——
+`isolated integration passed`、`process sessions and artifact regression passed`、
+`isolated session smoke passed`、`isolated /input snapshot passed`、
+`isolated batch smoke passed`，服务以 `code=exited/status=0` 结束。
+这说明此前的 EACCES 就是那个 AppArmor 开关造成的，而不是程序缺陷。
+该开关不持久（重启即恢复默认），项目本身仍然不改宿主策略；要不要放开是使用方的决定。
+
 ## 先检查项目是否适合当前环境
 
 ```bash

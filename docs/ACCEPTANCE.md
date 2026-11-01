@@ -90,8 +90,10 @@ exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
 ## 6. 已知未覆盖
 
 - 崩溃/掉电恢复、磁盘故障、长期泄漏、并发竞争
-- `/input` 的 `snapshot_copy`：**复制这一步**已在宿主侧验证（`session-open` 失败前 run 目录里出现 `<run>/input`，内容与宿主一致、宿主后续修改不可见、按 `keep_on_close` 保留或删除）；**挂进沙箱 namespace 那一段**只在允许非特权 userns 的机器上可验，本机 AppArmor 阻塞，`sessions.py` 的 isolated 分支已有断言
-- `session_wire` 仍是 Protobuf → JSON → 业务层 → JSON → Protobuf
+- `/input` 的 `snapshot_copy`：**已端到端验过**——用户临时放开
+  `kernel.apparmor_restrict_unprivileged_userns` 后跑 `tools/delegated_run.py` 全绿，含
+  `isolated /input snapshot passed`（沙箱内看不到宿主后续修改）。不放开该开关时只能验宿主侧那半段（复制、原子发布、按 `keep_on_close` 保留/删除）
+- `session_wire` 的**回包方向**仍是「类型化记录 → 渲染成 JSON → Protobuf」，见 MIGRATION_SESSION 第 4 步
 - 两份 pid-1 实现只剩环境准备共享，命令循环仍各写一份
 
 ## 7. 报告模板
