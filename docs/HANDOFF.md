@@ -119,7 +119,13 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - `workspace.input = "snapshot_copy"` 时，`snapshot_inputs()`（`src/storage/artifacts.cpp`）在 launcher 启动前把每个 `/input` 挂载点的宿主目录复制到 `<run>/input`，并把 `RunConfig.mounts[].source` 改指向副本。之后下游（launcher、init、mount）只看到副本。
 - 复制**复用** `file_request` 的 snapshot 路径，因此继承同一套语义：祖先目录不跟随符号链接、拒绝符号链接/硬链接/特殊文件、边读边校验文件未被修改、staging 目录 + `renameat2(NOREPLACE)` 原子发布。失败时保留 staging 目录用于诊断，不降级成绑定。
 - 单次执行里它是 `PrepareStep::input_snapshot`（插在 `output_capture` 与 `launcher` 之间，因为 launcher 拿的就是挂载源），撤销时删除副本；会话路径在 `RunStore` 之后、`LauncherClient` 之前调用，关闭时随 workspace 一起删除，删除失败追加进 `cleanup_errors`。
-- 验证边界要说清楚：process 模式本来就不允许 mounts，所以 `/input` 只有 isolated 模式才存在；本机没有 cgroup 委派，`isolation_integration` 一直是跳过。因此这条路径的端到端验证在 `sessions.py` 的 isolated 分支里（需 `SANDBOX_TEST_RUNTIME`/`SANDBOX_TEST_CGROUP`），断言方式是「会话起来后改宿主文件，副本仍是原内容」。**这台虚拟机上没有跑过有真实挂载的用例。**
+- 验证边界要说清楚：process 模式本来就不允许 mounts，所以 `/input` 只有 isolated 模式才存在；本机 `apparmor_restrict_unprivileged_userns=1`，`sandbox doctor` 的探测卡在 `make_mounts_private`（EACCES，DEPLOYMENT.md 第 9 行记的同一件事），隔离路径从来没在这台机器上起来过。
+- **已在此机器上验到的部分**（不依赖 namespace，因为复制发生在 launcher 之前、纯宿主侧）：用真实 config 跑 `sandbox session-open`，隔离如预期在启动阶段失败，但 run 目录里
+  - `config.json` 的 `/input` 挂载源已被改写为 `<run>/input`；
+  - `<run>/input/data` 与 `<run>/input/sub/deep` 内容与宿主一致（含子目录）；
+  - 之后改宿主源文件，副本仍是原内容；
+  - `keep_on_close=true` 时副本与 workspace 一起保留；`false` 时两者都被删除，且 `cleanup_errors` 为空。
+- **仍未验到的部分**：把这份副本挂进沙箱 namespace（挂载代码本轮未改）。要覆盖它需要在允许非特权 userns 的机器上跑 `tools/delegated_run.py`（见 ACCEPTANCE.md §3），`sessions.py` 的 isolated 分支已有对应断言。
 
 ### 4.3 `session_wire` 类型化（**请求方向已完成，回包方向待做**）
 
