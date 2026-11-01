@@ -56,7 +56,8 @@ RunConfig RunConfig::load(const fs::path &file) {
 RunConfig RunConfig::parse(const Json &j, const fs::path &base) {
     require_keys(j,
                  {"schema_version", "argv", "runtime_root", "cwd", "stdin_file", "env", "mounts",
-                  "limits", "mode", "network", "seccomp", "cgroup_root", "metrics", "session", "workspace"},
+                  "limits", "mode", "network", "seccomp", "cgroup_root", "metrics", "session", "workspace",
+                  "workspace_transfer"},
                  "config");
     if (!j.contains("schema_version") || j.at("schema_version") != 1)
         throw std::runtime_error("schema_version must be 1");
@@ -74,6 +75,14 @@ RunConfig RunConfig::parse(const Json &j, const fs::path &base) {
     c.mode = j.value("mode", "isolated");
     c.network = j.value("network", "none");
     c.seccomp = j.value("seccomp", "baseline");
+    // Internal: only a supervisor that owns a quota-enforced workspace sets this.
+    // Accepted from a file because the effective configuration travels to init as
+    // JSON, but validated hard below.
+    if (j.contains("workspace_transfer")) {
+        if (!j.at("workspace_transfer").is_string())
+            throw std::runtime_error("workspace_transfer must be a string");
+        c.workspace_transfer = j.at("workspace_transfer").get<std::string>();
+    }
     if (j.contains("env"))
         c.env = j.at("env").get<std::map<std::string, std::string>>();
     for (const auto &m : j.value("mounts", Json::array())) {
@@ -161,6 +170,12 @@ void RunConfig::validate(bool allow_process) const {
         !limits.tmp_bytes)
         throw std::runtime_error(
             "invalid limits (memory>=16MiB, pids>=4, positive deadlines/quota/tmp)");
+    if (!workspace_transfer.empty()) {
+        if (mode != "isolated")
+            throw std::runtime_error("workspace_transfer requires isolated mode");
+        if (workspace_transfer.is_relative() || contains_nul(workspace_transfer.string()))
+            throw std::runtime_error("workspace_transfer must be an absolute path");
+    }
     if (mode == "isolated" && (runtime_root.empty() || cgroup_root.empty()))
         throw std::runtime_error("isolated mode needs runtime_root and delegated cgroup_root");
     if (mode == "process" &&
@@ -228,6 +243,7 @@ Json RunConfig::to_json() const {
               {"max_depth", workspace.max_depth},
               {"input", input_mode_name(workspace.input)},
               {"keep_on_close", workspace.keep_on_close}}},
+            {"workspace_transfer", workspace_transfer.string()},
             {"limits",
              {{"memory_bytes", l.memory_bytes},
               {"swap_bytes", l.swap_bytes},

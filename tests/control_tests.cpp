@@ -57,6 +57,15 @@ void test_round_trip() {
     round_trip(Stop{}, "stop");
     round_trip(CancelCommand{}, "cancel");
     round_trip(StdinHandle{*CommandIndex::from_number(1)}, "stdin_handle");
+    // Workspace transfer: the sandbox moves its own data because the supervisor
+    // cannot read a workspace mounted inside the sandbox namespace.
+    round_trip(ImportTree{"payload"}, "import_tree");
+    round_trip(ExportTree{"out-7"}, "export_tree");
+    round_trip(Transferred{true, "", 4096, 12}, "transferred ok");
+    round_trip(Transferred{false, "byte limit exceeded", 0, 0}, "transferred failure");
+    check(fd_contract(ControlKind::import_tree).required == 0, "transfer carries no descriptors");
+    check(fd_contract(ControlKind::export_tree).required == 0, "export carries no descriptors");
+    check(fd_contract(ControlKind::transferred).required == 0, "answer carries no descriptors");
     round_trip(StdoutHandle{*CommandIndex::from_number(2)}, "stdout_handle");
     round_trip(StderrHandle{*CommandIndex::from_number(3)}, "stderr_handle");
     round_trip(Command{*CommandIndex::from_number(4), "{\"mode\":\"process\"}"}, "command");

@@ -57,6 +57,22 @@ void RootfsBuilder::build(const RunConfig &c, const fs::path &root) {
         attributes(target, c.mounts[i].readonly,
                    !(c.persistent && c.mounts[i].target == "/output"));
     }
+    if (!c.workspace_transfer.empty()) {
+        // The workspace is a tmpfs owned by this namespace. The supervisor cannot
+        // see it, so these two numbers are the only thing bounding what the target
+        // can write: bytes and inodes, enforced by the kernel, cumulative over the
+        // whole session. Exec is allowed because a session builds and runs its own
+        // artifacts inside the workspace.
+        auto quota = "size=" + std::to_string(c.workspace.max_bytes) +
+                     ",nr_inodes=" + std::to_string(c.workspace.max_entries) + ",mode=0700";
+        mount_call("tmpfs", root / "output", "tmpfs", MS_NOSUID | MS_NODEV, quota.c_str());
+        // The only host path visible here besides the runtime and /input: data
+        // crosses the boundary through it, in both directions, on request.
+        auto transfer = root / "transfer";
+        checked(::mkdir(transfer.c_str(), 0700), "create transfer mountpoint");
+        mount_call(c.workspace_transfer.c_str(), transfer, nullptr, MS_BIND);
+        attributes(transfer, false, true);
+    }
     auto size = "size=" + std::to_string(c.limits.tmp_bytes) + ",mode=0700";
     for (auto name : {"work", "tmp"})
         mount_call("tmpfs", root / name, "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, size.c_str());

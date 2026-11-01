@@ -1,4 +1,5 @@
 #include "sandbox/init_common.hpp"
+#include "sandbox/interactive.hpp"
 #include "sandbox/isolation.hpp"
 #include "sandbox/protocol.hpp"
 #include <array>
@@ -298,6 +299,57 @@ int run_once(ControlChannel &control, const RunConfig &config, const fs::path &r
     return 0;
 }
 
+// A single path component, so a transfer can never address anything outside the
+// workspace or the transfer directory.
+bool plain_component(const std::string &name) {
+    return !name.empty() && name != "." && name != ".." &&
+           name.find('/') == std::string::npos && name.find('\0') == std::string::npos;
+}
+
+// Move one uploaded tree into the workspace. The destination must not exist: an
+// upload never overwrites what the target already wrote.
+Transferred transfer_in(const RunConfig &config, const std::string &name) {
+    Transferred answer;
+    try {
+        if (config.workspace_transfer.empty())
+            throw std::runtime_error("workspace transfer is not configured");
+        if (!plain_component(name))
+            throw std::runtime_error("transfer name is not a single component");
+        auto copied = file_request({{"op", "snapshot"},
+                                    {"source", (fs::path("/transfer/in") / name).string()},
+                                    {"destination", (fs::path("/output") / name).string()}},
+                                   config.workspace);
+        answer.ok = true;
+        answer.bytes = copied.value("bytes", std::uint64_t{0});
+        answer.entries = static_cast<std::uint32_t>(copied.at("entries").size());
+    } catch (const std::exception &failure) {
+        answer.error = failure.what();
+    }
+    return answer;
+}
+
+// Copy the whole workspace out under a tag that must not exist yet, so a failed
+// export can never damage the previous good copy.
+Transferred transfer_out(const RunConfig &config, const std::string &tag) {
+    Transferred answer;
+    try {
+        if (config.workspace_transfer.empty())
+            throw std::runtime_error("workspace transfer is not configured");
+        if (!plain_component(tag))
+            throw std::runtime_error("transfer tag is not a single component");
+        auto copied = file_request({{"op", "snapshot"},
+                                    {"source", "/output"},
+                                    {"destination", (fs::path("/transfer") / tag).string()}},
+                                   config.workspace);
+        answer.ok = true;
+        answer.bytes = copied.value("bytes", std::uint64_t{0});
+        answer.entries = static_cast<std::uint32_t>(copied.at("entries").size());
+    } catch (const std::exception &failure) {
+        answer.error = failure.what();
+    }
+    return answer;
+}
+
 // One environment, many commands. init builds the environment once and supervises
 // each command with the same code the one-shot mode uses.
 int run_persistent(ControlChannel &control, const RunConfig &config, const fs::path &root) {
@@ -325,6 +377,14 @@ int run_persistent(ControlChannel &control, const RunConfig &config, const fs::p
         }
         if (std::holds_alternative<CancelCommand>(frame->message))
             continue; // no command is active: nothing to cancel
+        if (auto *import = std::get_if<ImportTree>(&frame->message)) {
+            control.send(transfer_in(config, import->name));
+            continue;
+        }
+        if (auto *exported = std::get_if<ExportTree>(&frame->message)) {
+            control.send(transfer_out(config, exported->tag));
+            continue;
+        }
         if (!std::holds_alternative<StdinHandle>(frame->message) || !frame->fd)
             throw std::runtime_error("expected STDIN fd");
         // Keep every source above the dup2 destination range.

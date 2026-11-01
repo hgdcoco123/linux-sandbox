@@ -54,6 +54,12 @@ const char *control_kind_name(ControlKind kind) noexcept {
         return "init_error";
     case ControlKind::command_done:
         return "command_done";
+    case ControlKind::import_tree:
+        return "import_tree";
+    case ControlKind::export_tree:
+        return "export_tree";
+    case ControlKind::transferred:
+        return "transferred";
     }
     return "unknown";
 }
@@ -78,6 +84,10 @@ const char *command_stop_name(CommandStop stop) noexcept {
 
 FdContract fd_contract(ControlKind kind) noexcept {
     switch (kind) {
+    case ControlKind::import_tree:
+    case ControlKind::export_tree:
+    case ControlKind::transferred:
+        return FdContract{0, "none"};
     case ControlKind::init_created:
         return {1, "init pidfd"};
     case ControlKind::stdin_handle:
@@ -138,6 +148,12 @@ ControlKind kind_of(const ControlMessage &message) noexcept {
                 return ControlKind::init_done;
             else if constexpr (std::is_same_v<T, CommandDone>)
                 return ControlKind::command_done;
+            else if constexpr (std::is_same_v<T, ImportTree>)
+                return ControlKind::import_tree;
+            else if constexpr (std::is_same_v<T, ExportTree>)
+                return ControlKind::export_tree;
+            else if constexpr (std::is_same_v<T, Transferred>)
+                return ControlKind::transferred;
             else
                 return ControlKind::init_error;
         },
@@ -183,6 +199,15 @@ std::string encode(const ControlMessage &message) {
                 });
                 payload.u8(static_cast<std::uint8_t>(value.stop));
                 payload.varint(static_cast<std::uint64_t>(value.elapsed.count()));
+            } else if constexpr (std::is_same_v<T, ImportTree>) {
+                payload.text(value.name);
+            } else if constexpr (std::is_same_v<T, ExportTree>) {
+                payload.text(value.tag);
+            } else if constexpr (std::is_same_v<T, Transferred>) {
+                payload.u8(value.ok ? 1 : 0);
+                payload.text(value.error);
+                payload.varint(value.bytes);
+                payload.varint(value.entries);
             }
         },
         message);
@@ -297,6 +322,25 @@ ControlMessage decode(std::string_view packet) {
         auto elapsed = std::chrono::milliseconds(static_cast<std::int64_t>(reader.varint()));
         message =
             CommandDone{*index, code, signal, exec_errno, static_cast<CommandStop>(stop), elapsed};
+        break;
+    }
+    case ControlKind::import_tree:
+        message = ImportTree{reader.text()};
+        break;
+    case ControlKind::export_tree:
+        message = ExportTree{reader.text()};
+        break;
+    case ControlKind::transferred: {
+        const auto ok = reader.u8();
+        if (ok > 1)
+            throw ControlError("BAD_PACKET", "invalid transfer flag");
+        auto error = reader.text();
+        auto bytes = reader.varint();
+        auto entries = reader.varint();
+        if (entries > 0xFFFFFFFFULL)
+            throw ControlError("BAD_PACKET", "entry count out of range");
+        message = Transferred{ok == 1, std::move(error), bytes,
+                              static_cast<std::uint32_t>(entries)};
         break;
     }
     default:

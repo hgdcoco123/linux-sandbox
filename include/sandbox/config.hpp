@@ -41,6 +41,11 @@ struct RunConfig {
     Limits limits;
     // What may enter the sandbox workspace and what survives teardown.
     WorkspacePolicy workspace;
+    // Host directory bound into the sandbox at /transfer when the workspace is a
+    // quota-enforced tmpfs. A tmpfs mounted inside the sandbox namespace is
+    // invisible to the supervisor, so the sandbox moves its own data through this
+    // directory instead. Empty means the workspace is the plain host directory.
+    fs::path workspace_transfer;
     std::string mode = "isolated";
     std::string network = "none";
     std::string seccomp = "baseline";

@@ -46,6 +46,12 @@ enum class ControlKind : std::uint8_t {
     init_done = 16,
     init_error = 17,
     command_done = 18,
+    // Workspace transfer between the run directory and the sandbox-owned tmpfs.
+    // Both directions are explicit requests: the host cannot read a tmpfs mounted
+    // inside the sandbox's namespace, so the sandbox has to move its own data.
+    import_tree = 19,
+    export_tree = 20,
+    transferred = 21,
 };
 
 // Why a session command ended, as reported by the pid-1 process.
@@ -125,10 +131,30 @@ struct CommandDone {
     std::chrono::milliseconds elapsed{0};
 };
 
+// Move one uploaded tree into the sandbox workspace. `name` is a single path
+// component: the destination is always /output/<name>.
+struct ImportTree {
+    std::string name;
+};
+// Copy the whole sandbox workspace out to /transfer/<tag>. The tag names a
+// destination that must not already exist, so a failed export never overwrites a
+// previous good copy.
+struct ExportTree {
+    std::string tag;
+};
+// The answer to either request. `ok` is about the copy, not about the run: a
+// failed export is reported here and must not be mistaken for a failed target.
+struct Transferred {
+    bool ok = false;
+    std::string error;
+    std::uint64_t bytes = 0;
+    std::uint32_t entries = 0;
+};
+
 using ControlMessage = std::variant<InitCreated, InitReaped, BootstrapError, Prepare, Exec, Stop,
                                     CancelCommand, StdinHandle, StdoutHandle, StderrHandle, Command, EnvReady,
                                     ExecObserved, StartFailed, MainExit, InitDone, InitError,
-                                    CommandDone>;
+                                    CommandDone, ImportTree, ExportTree, Transferred>;
 
 [[nodiscard]] ControlKind kind_of(const ControlMessage &) noexcept;
 
