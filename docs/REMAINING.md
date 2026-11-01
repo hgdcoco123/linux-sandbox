@@ -30,8 +30,8 @@
 - **会话控制器接入 `ExecutionCore`**：每条命令一个 core，结果直接是 `ExecutionResult`；
   动作映射的差异（init 拥有进程组、`KillTarget` 升级为关闭会话）记在 HANDOFF §4.4
 
-仍待做的小尾巴：`CommandRecord` / `CommandFacts` 还在 `command_model.*` 与 `task_tests.cpp`
-里，运行时已不用它们。
+`CommandRecord` / `CommandFacts` / `StopReason` / `CommandPhase` 已从 `command_model.*` 删除，
+`task_tests.cpp` 只保留 ID/请求解析与调度器断言。
 
 **执行顺序与红线见 [MIGRATION_SESSION.md](MIGRATION_SESSION.md)。**
 
@@ -79,7 +79,8 @@
 仍待做：
 
 - `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化
-- `sessions.py` 的 isolated 分支已更新（含 `/input` 快照断言），但本机无 cgroup 委派、跑不到
+- 隔离路径（`tools/delegated_run.py`）只在放开 `kernel.apparmor_restrict_unprivileged_userns`
+  的机器上跑得起来；最后一次全绿是在这次 init 合并**之前**，合并后未重跑
 
 已完成：
 
