@@ -170,7 +170,10 @@ Json RunStore::cleanup(const fs::path &root) {
                                                     "duplicate recovery lock")),
                                    open_dir(p));
                 SessionStore records(recovered);
-                session = records.recover(session);
+                auto recovery = records.recover(session);
+                session = recovery.session;
+                if (recovery.last)
+                    session["last"] = session_wire::command_report_to_json(*recovery.last);
                 session["session_state"] = "closed";
                 session["stop_reason"] = "recovered_after_interruption";
                 session["errors"] = {"execution outcome unknown after supervisor interruption"};

@@ -232,6 +232,77 @@ Json decode_request(std::string_view packet) {
     return session_request_to_json(decoded.request, decoded.application_version);
 }
 
+namespace {
+// The legacy stop_reason vocabulary. A type with no legacy spelling (oom) has no
+// entry, and the reply omits the field rather than inventing one.
+const char *legacy_stop_reason(const ExecutionOutcome &outcome) {
+    const auto &value = outcome.variant();
+    if (std::holds_alternative<Exited>(value) || std::holds_alternative<Signaled>(value))
+        return "main_exited";
+    if (std::holds_alternative<TimedOut>(value))
+        return "timeout";
+    if (const auto *cancelled = std::get_if<Cancelled>(&value))
+        return cancelled->cause == CancelCause::session_closed ? "session_closed" : "cancelled";
+    if (std::holds_alternative<StartupFailed>(value))
+        return "startup_failure";
+    if (std::holds_alternative<SupervisionFailed>(value))
+        return "host_error";
+    return nullptr;
+}
+
+Json stream_fields(const OutputResult &output) {
+    // "seen" and "stored" are derived, never stored twice: seen is everything the
+    // producer emitted, stored is what reached the file.
+    return {{"saved_bytes", output.saved_bytes},
+            {"discarded_bytes", output.discarded_bytes},
+            {"failed_bytes", output.failed_bytes},
+            {"queue_peak_bytes", output.queue_peak_bytes},
+            {"backpressure_events", output.backpressure_events},
+            {"eof", output.eof},
+            {"flushed", output.flushed},
+            {"write_error", output.write_error},
+            {"seen", output.saved_bytes + output.discarded_bytes},
+            {"stored", output.saved_bytes}};
+}
+} // namespace
+
+Json command_report_to_json(const CommandReport &report) {
+    const auto &accepted = report.accepted;
+    Json value = {{"command_id", accepted.index.str()}, {"argv", accepted.request.argv()}};
+    if (accepted.effective_cwd)
+        value["cwd"] = accepted.effective_cwd->string();
+    else if (accepted.request.cwd())
+        value["cwd"] = accepted.request.cwd()->string();
+    if (accepted.request.key())
+        value["request_id"] = accepted.request.key()->str();
+    if (!report.finished) {
+        // Accepted, no outcome observed. Not the same answer as "running".
+        value["state"] = "uncertain";
+        value["outcome_known"] = false;
+        return value;
+    }
+    const auto &result = report.finished->result;
+    const auto &outcome = result.outcome;
+    // "interrupted" is the legacy spelling for "recovery wrote this, no outcome was
+    // ever observed". A real run can only reach it through Indeterminate.
+    const bool known = !std::holds_alternative<Indeterminate>(outcome.variant());
+    value["state"] = known ? "finished" : "interrupted";
+    value["exit_code"] = outcome.exit_code() ? Json(*outcome.exit_code()) : Json(nullptr);
+    value["signal"] = outcome.term_signal() ? Json(*outcome.term_signal()) : Json(nullptr);
+    if (const auto *failed = std::get_if<StartupFailed>(&outcome.variant()))
+        value["exec_errno"] = failed->exec_errno ? Json(failed->exec_errno) : Json(nullptr);
+    else
+        value["exec_errno"] = nullptr;
+    if (const char *reason = legacy_stop_reason(outcome))
+        value["stop_reason"] = reason;
+    value["execution_ms"] = result.timing.execution.count();
+    value["stdout"] = stream_fields(result.out);
+    value["stderr"] = stream_fields(result.err);
+    if (!known)
+        value["outcome_known"] = false;
+    return value;
+}
+
 std::string encode_request(const Json &request) {
     auto j = validate_session_request(request);
     pb::SessionRequest m; m.set_protocol_version(1); m.set_application_version(request.value("protocol_version", 1));

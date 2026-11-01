@@ -15,21 +15,6 @@ using Clock = std::chrono::system_clock;
 // a second writer.
 constexpr int legacy_session_record_version = 2;
 
-Json stream_fields(const OutputResult &output) {
-    // "seen" and "stored" are derived, never stored twice: seen is everything the
-    // producer emitted, stored is what reached the file.
-    return {{"saved_bytes", output.saved_bytes},
-            {"discarded_bytes", output.discarded_bytes},
-            {"failed_bytes", output.failed_bytes},
-            {"queue_peak_bytes", output.queue_peak_bytes},
-            {"backpressure_events", output.backpressure_events},
-            {"eof", output.eof},
-            {"flushed", output.flushed},
-            {"write_error", output.write_error},
-            {"seen", output.saved_bytes + output.discarded_bytes},
-            {"stored", output.saved_bytes}};
-}
-
 OutputResult decode_stream_fields(const Json &value) {
     OutputResult output;
     output.saved_bytes = value.value("saved_bytes", std::uint64_t{0});
@@ -41,24 +26,6 @@ OutputResult decode_stream_fields(const Json &value) {
     output.flushed = value.value("flushed", false);
     output.write_error = value.value("write_error", std::string());
     return output;
-}
-
-// The legacy stop_reason vocabulary. Only values this build can still produce a
-// reply for are listed; a type with no legacy spelling (oom, indeterminate) has
-// no entry, and the reply omits the field rather than inventing one.
-const char *legacy_stop_reason(const ExecutionOutcome &outcome) {
-    const auto &value = outcome.variant();
-    if (std::holds_alternative<Exited>(value) || std::holds_alternative<Signaled>(value))
-        return "main_exited";
-    if (std::holds_alternative<TimedOut>(value))
-        return "timeout";
-    if (const auto *cancelled = std::get_if<Cancelled>(&value))
-        return cancelled->cause == CancelCause::session_closed ? "session_closed" : "cancelled";
-    if (std::holds_alternative<StartupFailed>(value))
-        return "startup_failure";
-    if (std::holds_alternative<SupervisionFailed>(value))
-        return "host_error";
-    return nullptr;
 }
 
 // Legacy records may carry an explicit null for a fact that was never learned.
@@ -93,49 +60,6 @@ ExecutionOutcome outcome_of_legacy(const Json &command) {
     if (reason == "host_error")
         return ExecutionOutcome(SupervisionFailed{"command supervision failed"});
     throw std::runtime_error("unknown stop reason in record: " + reason);
-}
-
-Json base_reply(const AcceptedCommand &accepted) {
-    Json value = {{"command_id", accepted.index.str()}, {"argv", accepted.request.argv()}};
-    if (accepted.effective_cwd)
-        value["cwd"] = accepted.effective_cwd->string();
-    else if (accepted.request.cwd())
-        value["cwd"] = accepted.request.cwd()->string();
-    value["state"] = "running";
-    if (accepted.request.key())
-        value["request_id"] = accepted.request.key()->str();
-    return value;
-}
-
-Json terminal_reply(const AcceptedCommand &accepted, const FinishedCommand &finished) {
-    Json value = base_reply(accepted);
-    const auto &result = finished.result;
-    const auto &outcome = result.outcome;
-    // "interrupted" is the legacy spelling for "recovery wrote this, no outcome
-    // was ever observed". A real run can only reach it through Indeterminate.
-    const bool known = !std::holds_alternative<Indeterminate>(outcome.variant());
-    value["state"] = known ? "finished" : "interrupted";
-    value["exit_code"] = outcome.exit_code() ? Json(*outcome.exit_code()) : Json(nullptr);
-    value["signal"] = outcome.term_signal() ? Json(*outcome.term_signal()) : Json(nullptr);
-    if (const auto *failed = std::get_if<StartupFailed>(&outcome.variant()))
-        value["exec_errno"] = failed->exec_errno ? Json(failed->exec_errno) : Json(nullptr);
-    else
-        value["exec_errno"] = nullptr;
-    if (const char *reason = legacy_stop_reason(outcome))
-        value["stop_reason"] = reason;
-    value["execution_ms"] = result.timing.execution.count();
-    value["stdout"] = stream_fields(result.out);
-    value["stderr"] = stream_fields(result.err);
-    if (!known)
-        value["outcome_known"] = false;
-    return value;
-}
-
-Json uncertain_reply(const AcceptedCommand &accepted) {
-    Json value = base_reply(accepted);
-    value["state"] = "uncertain";
-    value["outcome_known"] = false;
-    return value;
 }
 
 // A record is compared without its timestamps: re-finishing the same command with
@@ -341,62 +265,49 @@ std::optional<AcceptedCommand> SessionStore::find_request(const fs::path &direct
     }
 }
 
-Json SessionStore::result(const CommandIndex &index) const {
-    const auto id = index.str();
-    const auto directory = store_.directory() / id;
+std::optional<CommandReport> SessionStore::result(const CommandIndex &index) const {
+    const auto directory = store_.directory() / index.str();
     auto finished = read_finished_record(directory);
     if (!finished)
-        return {{"state", "pending"}};
+        return std::nullopt; // accepted, no outcome yet
     auto accepted = read_accepted_record(directory);
     if (!accepted)
         throw StorageError("result without a durable acceptance");
-    return terminal_reply(*accepted, *finished);
+    return CommandReport{*accepted, std::move(finished)};
 }
 
-std::optional<Json> SessionStore::replay(const ExecutionRequest &request,
-                                         const Json &active) const {
+std::optional<CommandReport> SessionStore::replay(const ExecutionRequest &request) const {
     if (!request.key())
         return std::nullopt; // legacy v1 has no dedup guarantee
     auto found = find_request(store_.directory(), *request.key());
     if (!found)
         return std::nullopt;
     if (!found->request.same_intent(request))
-        throw SessionError("REQUEST_CONFLICT", "request_id already belongs to different arguments");
-    const auto directory = store_.directory() / found->index.str();
-    if (auto finished = read_finished_record(directory))
-        return terminal_reply(*found, *finished);
-    if (active.is_object() && active.value("command_id", "") == found->index.str())
-        return active;
-    return uncertain_reply(*found);
+        throw SessionError("REQUEST_CONFLICT",
+                           "request_id already belongs to different arguments");
+    return CommandReport{*found, read_finished_record(store_.directory() / found->index.str())};
 }
 
-Json SessionStore::request_status(const RequestKey &key, const Json &active) const {
+CommandReport SessionStore::request_status(const RequestKey &key) const {
     auto found = find_request(store_.directory(), key);
     if (!found)
         throw SessionError("REQUEST_NOT_FOUND", "no durable acceptance for request_id");
-    const auto directory = store_.directory() / found->index.str();
-    if (auto finished = read_finished_record(directory))
-        return terminal_reply(*found, *finished);
-    if (active.is_object() && active.value("command_id", "") == found->index.str())
-        return active;
-    return uncertain_reply(*found);
+    return CommandReport{*found, read_finished_record(store_.directory() / found->index.str())};
 }
 
-Json SessionStore::lookup_request(const fs::path &directory, const RequestKey &key) {
+CommandReport SessionStore::lookup_request(const fs::path &directory, const RequestKey &key) {
     auto found = find_request(directory, key);
     if (!found)
         throw SessionError("REQUEST_NOT_FOUND", "no durable acceptance for request_id");
-    auto command_directory = directory / found->index.str();
-    if (auto finished = read_finished_record(command_directory))
-        return terminal_reply(*found, *finished);
-    return uncertain_reply(*found);
+    return CommandReport{*found, read_finished_record(directory / found->index.str())};
 }
 
-Json SessionStore::recover(Json session) {
+SessionRecovery SessionStore::recover(Json session) {
     // Scan durable intents as well as the snapshot: a crash may precede snapshot
     // publication. A command whose result was never written is recorded as
     // indeterminate - it must never be dispatched again.
-    std::map<std::string, Json> commands;
+    SessionRecovery recovery{std::move(session), std::nullopt};
+    std::map<std::string, CommandReport> commands;
     for (const auto &entry : fs::directory_iterator(store_.directory())) {
         auto id = entry.path().filename().string();
         if (id.rfind("cmd-", 0) != 0)
@@ -412,17 +323,17 @@ Json SessionStore::recover(Json session) {
             finished = indeterminate_record(*accepted);
             store_.write_json(id + "/result.json", encode(*finished));
         }
-        commands[id] = terminal_reply(*accepted, *finished);
+        commands.emplace(id, CommandReport{*accepted, std::move(finished)});
     }
-    if (session.contains("current") && session.at("current").is_object()) {
-        auto command = session.at("current");
-        auto id = command.at("command_id").get<std::string>();
+    if (recovery.session.contains("current") && recovery.session.at("current").is_object()) {
+        auto id = recovery.session.at("current").at("command_id").get<std::string>();
         validate_command_id(id);
-        if (commands.contains(id))
-            session["last"] = commands.at(id);
+        auto found = commands.find(id);
+        if (found != commands.end())
+            recovery.last = found->second;
     }
-    session["current"] = nullptr;
-    return session;
+    recovery.session["current"] = nullptr;
+    return recovery;
 }
 
 void SessionStore::close(Json session) {

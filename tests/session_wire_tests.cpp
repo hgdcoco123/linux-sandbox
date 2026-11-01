@@ -55,6 +55,26 @@ int main() {
     Json result = {{"command_id","cmd-1"},{"state","interrupted"},{"exit_code",nullptr},
                    {"signal",0},{"metrics",{{"counter",std::uint64_t(-1)},{"missing",nullptr}}}};
     assert(session_wire::decode_response(session_wire::encode_response("result", result)) == result);
+    // The record meets the protocol here: storage hands over typed reports and the
+    // wire layer decides how to spell them.
+    CommandReport report{AcceptedCommand{*CommandIndex::parse("cmd-1"),
+                                         ExecutionRequest::create({"/bin/true"}),
+                                         std::chrono::system_clock::now(),
+                                         std::filesystem::path("/tmp")},
+                         std::nullopt};
+    auto rendered = session_wire::command_report_to_json(report);
+    assert(rendered.at("state") == "uncertain" && rendered.at("command_id") == "cmd-1");
+    assert(rendered.at("cwd") == "/tmp" && rendered.at("outcome_known") == false);
+    report.finished =
+        FinishedCommand{*CommandIndex::parse("cmd-1"), ExecutionResult{},
+                        std::chrono::system_clock::now()};
+    report.finished->result.outcome = ExecutionOutcome(Exited{7});
+    report.finished->result.out.saved_bytes = 11;
+    report.finished->result.out.eof = true;
+    rendered = session_wire::command_report_to_json(report);
+    assert(rendered.at("state") == "finished" && rendered.at("exit_code") == 7);
+    assert(rendered.at("stop_reason") == "main_exited" && rendered.at("exec_errno").is_null());
+    assert(rendered.at("stdout").at("stored") == 11 && rendered.at("stdout").at("seen") == 11);
     try { session_wire::decode_session_request("SBP1\xff"); assert(false); }
     catch (const SessionError &) {}
     std::cout << "session wire conversion passed\n";

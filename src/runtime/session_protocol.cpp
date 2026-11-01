@@ -15,7 +15,7 @@ Json ControlServer::request(const fs::path &root, const std::string &id, const J
         auto key = RequestKey::parse(parsed.at("request_id").get<std::string>());
         if (!key)
             throw SessionError("INVALID_REQUEST", "invalid request_id");
-        return SessionStore::lookup_request(directory, *key);
+        return session_wire::command_report_to_json(SessionStore::lookup_request(directory, *key));
     }
     auto path = directory / "control.sock";
     UniqueFd fd(

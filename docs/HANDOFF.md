@@ -119,7 +119,12 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - **契约收紧（有意为之）**：门的这一侧现在按业务类型校验，所以 `cwd: ""`、`wall_ms: 0`、`cmd-01` 这类值在解码处就返回 `INVALID_REQUEST`，不再走到控制器里才被拒。`session_wire_tests.cpp` 与 `session_wire_interop_tests.py` 的相关 fixture 从"非法值"改成"合法值"，并新增了拒绝断言——断言的是同一件事：两个门对同一个请求给出同一个结论。
 - 批处理控制通道保留自己的 JSON 协议：`serve(typed, json_handler)` 的第二个参数就是给它和 `accept_cancel` 用的。
 
-仍待做（回包方向）：`encode_response` 仍吃 `Json answer`。下一步是给 `SessionReply` 补一个 `RawReply`（status / files 两个只读视图的边界例外），其余回包用 `Accepted` / `OutputChunk` / `ResultReply`，再由 `session_reply_to_json()` 编回旧形状保证 SDK 不变。
+附加（回包方向，已完成的部分）：
+
+- `SessionStore` 不再渲染回包：`replay` / `request_status` / `result` / `lookup_request` 返回类型化的 `CommandReport{accepted, optional<FinishedCommand>}`，`recover()` 返回 `SessionRecovery{session, last}`。**存储层从此不知道回包长什么样。**
+- 回包词汇表搬到了 wire 层：`session_wire::command_report_to_json()`。"accepted 但没结果"（`uncertain`）、"正在运行"（控制器用活的 `current()` 回答）、"终态"（`finished`/`interrupted`）是同一个 `CommandReport` 的三种说法，选择权在协议层。
+- 回包 payload 本身仍是 JSON，这是**有意的停点**而不是没做完：`status`、`files`、以及"正在运行的命令摘要"都带 `metrics` 这类可扩展观测 payload，业务类型里没有它的位置；给 `SessionReply` 加一个 `RawReply{Json}` 再把这些包回去，只是把 JSON 换个名字，还要多维护一套 `session_reply_to_json`。真要往下做，先设计"观测数据在业务类型里怎么表达"，而不是先打字化。
+- 顺带：`CommandReport` 让存储测试从"断言回包里的字符串"变成"断言记录里的字段"（`outcome.exit_code()`、`std::get_if<StartupFailed>()`），渲染由 `session_wire_tests` 覆盖。
 
 ### 4.4 会话控制器接入执行核心（**已完成**）
 

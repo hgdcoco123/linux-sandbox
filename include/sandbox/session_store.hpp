@@ -1,5 +1,5 @@
 #pragma once
-#include "sandbox/core/record.hpp"
+#include "sandbox/core/ops.hpp"
 #include "sandbox/core/request.hpp"
 #include "sandbox/session_protocol.hpp"
 #include "sandbox/store.hpp"
@@ -9,18 +9,24 @@ class StorageError : public SessionError {
     explicit StorageError(const std::string &message)
         : SessionError("STORAGE_FAILURE", message) {}
 };
+// What recovery learned about a session. `last` is the durable answer for the
+// command the snapshot still called current, so the caller can render it in
+// whatever vocabulary it speaks; storage does not know that vocabulary.
+struct SessionRecovery {
+    Json session;
+    std::optional<CommandReport> last;
+};
 // Durable per-command storage.
 //
 // The interface speaks business types; JSON exists only at the file boundary and
-// is produced by core/record_json. Two shapes are on disk, deliberately:
+// is produced by core/record_json. Two record shapes are on disk, deliberately:
 //
 //   request.json   encode(AcceptedCommand)   - the intent, written before dispatch
 //   result.json    encode(FinishedCommand)   - the terminal facts, written once
 //
-// Replies are still the session JSON the wire has always used, because the wire
-// has its own version and the SDK reads `result.json` directly. Translating a
-// record into that reply happens in this file and nowhere else, so the storage
-// format can change without the protocol changing with it.
+// Replies are not built here: a report goes to the wire layer, which knows how
+// the protocol spells it. That keeps the storage format and the protocol free to
+// version independently.
 class SessionStore {
     RunStore &store_;
 
@@ -34,13 +40,16 @@ class SessionStore {
     // Completion is written once. A confirmed result is never rewritten, not even
     // to a "more accurate" one.
     void finish(const FinishedCommand &);
-    std::optional<Json> replay(const ExecutionRequest &, const Json &active) const;
-    Json request_status(const RequestKey &, const Json &active = nullptr) const;
-    Json result(const CommandIndex &) const;
-    Json recover(Json session);
+    // nullopt when no command carries this request key.
+    std::optional<CommandReport> replay(const ExecutionRequest &) const;
+    // Throws REQUEST_NOT_FOUND when nothing carries the key.
+    CommandReport request_status(const RequestKey &) const;
+    // nullopt while the command has no durable result yet.
+    std::optional<CommandReport> result(const CommandIndex &) const;
+    SessionRecovery recover(Json session);
     void close(Json session);
     static Json read(const fs::path &path);
-    static Json lookup_request(const fs::path &directory, const RequestKey &);
+    static CommandReport lookup_request(const fs::path &directory, const RequestKey &);
 
   private:
     // Both return nullopt only when the file is absent. A file that exists but

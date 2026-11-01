@@ -30,6 +30,13 @@ struct DecodedRequest {
 // The operation's wire name ("execute", "stdin", "request-status", ...).
 [[nodiscard]] std::string_view operation_name(const SessionOperation &) noexcept;
 
+// A durable command report in the wire's command vocabulary.
+//
+// This is where the record meets the protocol: storage returns the two records and
+// has no opinion about how a reply spells them. A report without a finished record
+// says "uncertain" - it was accepted and no outcome has been observed.
+[[nodiscard]] Json command_report_to_json(const CommandReport &);
+
 // Rendering of a decoded packet, used by the JSON front door. Kept so the CLI and
 // the SDK never need to know protobuf.
 [[nodiscard]] Json decode_request(std::string_view packet);

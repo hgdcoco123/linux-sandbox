@@ -135,6 +135,16 @@ struct RequestStatusReply {
     std::optional<CommandIndex> command;
 };
 
+// The durable answer for one command: the accepted intent always, the terminal
+// record once one exists. Storage returns this and the wire layer decides how to
+// say it - "still running", "no outcome observed" and "finished" are different
+// answers built from the same two records, and the choice is a protocol question,
+// not a storage one.
+struct CommandReport {
+    AcceptedCommand accepted;
+    std::optional<FinishedCommand> finished;
+};
+
 struct ErrorReply {
     std::string code;
     std::string message;

@@ -35,9 +35,13 @@ SDK 和测试，中间态不可编译，也无法分阶段验收。
 
 - 会话每条命令现在由 `ExecutionCore` 监督，结果直接是 `ExecutionResult`，`CommandRecord` / `CommandFacts` 已不参与运行时。
 - 剩下的是把它们从 `command_model.*` 与 `task_tests.cpp` 里删掉（`ExecuteRequest` / `CommandId` / `WriteStdinRequest` 仍在外层边界使用，整文件删除还做不到）。
-### 第 4 步：回包类型化 —— **未做，且建议先别做**
+### 第 4 步：回包类型化 —— **已完成存储侧，回包 payload 有意保留 JSON**
 
-理由：可类型化的回包（`output` / `stdin` / `cancel`）收益很小；而 `status`、`files`、以及"正在运行的命令摘要"都携带 `metrics` 这类**可扩展观测 payload**，业务类型里没有它的位置，最后只能落成一个 `RawReply{Json}` 的边界例外。更值得做的是把 `SessionStore` 里那段"记录→旧回包形状"的渲染搬到 wire 层，让存储不再知道回包长什么样——那是独立的一小步。
+- 已完成：`SessionStore` 返回类型化 `CommandReport` / `SessionRecovery`，渲染搬到
+  `session_wire::command_report_to_json()`。存储不再知道回包形状。
+- 有意不做：给 `SessionReply` 加 `RawReply{Json}` 把 status/files/活命令摘要包回去。理由见
+  HANDOFF §4.3——那三个回包都带可扩展观测 payload，先想清楚观测数据在业务类型里怎么表达，
+  比给 JSON 换个名字有价值。`output` / `stdin` / `cancel` 这几个可类型化的回包单独做收益也很小。
 
 ### 第 5 步：SDK 跟进（可选）
 

@@ -7,6 +7,7 @@
 #include "sandbox/session_safety.hpp"
 #include "sandbox/session_state.hpp"
 #include "sandbox/session_store.hpp"
+#include "sandbox/session_wire.hpp"
 #include "sandbox/snapshot.hpp"
 #include "sandbox/workspace_service.hpp"
 #include <fcntl.h>
@@ -144,6 +145,16 @@ class SessionController {
     void persist() {
         records_->snapshot(snapshot());
     }
+    // A report about the command running right now is answered from the live
+    // summary: storage only knows what was written, and a replay must not claim
+    // "uncertain" about a command the caller can still talk to.
+    Json command_reply(const CommandReport &report) const {
+        const auto live = current();
+        if (!report.finished && live.is_object() &&
+            live.value("command_id", "") == report.accepted.index.str())
+            return live;
+        return session_wire::command_report_to_json(report);
+    }
     // Apply the core's decisions. The action vocabulary is shared with single
     // runs; what differs is who owns the process group:
     //   SignalTarget -> init owns it, so "stop the target" means "cancel this command"
@@ -219,8 +230,8 @@ class SessionController {
     }
     Json start(const ExecuteRequest &request) {
         const auto intent = intent_of(request);
-        if (auto existing = records_->replay(intent, current()))
-            return *existing;
+        if (auto existing = records_->replay(intent))
+            return command_reply(*existing);
         lifecycle_.require_idle();
         if (counter_ >= 1024)
             throw SessionError("COMMAND_LIMIT", "session command count limit 1024 reached");
@@ -296,7 +307,7 @@ class SessionController {
                 if constexpr (std::is_same_v<T, Status>) {
                     return snapshot();
                 } else if constexpr (std::is_same_v<T, RequestStatusQuery>) {
-                    return records_->request_status(value.key, current());
+                    return command_reply(records_->request_status(value.key));
                 } else if constexpr (std::is_same_v<T, Execute>) {
                     // Transitional: the storage layer still speaks the legacy
                     // request type, so the typed request is converted once here.
@@ -341,7 +352,11 @@ class SessionController {
                         execution_->input.write.reset();
                     return {{"closed", true}};
                 } else if constexpr (std::is_same_v<T, ReadResult>) {
-                    return records_->result(value.command);
+                    auto report = records_->result(value.command);
+                    // Accepted with no outcome yet is not a terminal answer.
+                    if (!report)
+                        return {{"state", "pending"}};
+                    return session_wire::command_report_to_json(*report);
                 } else if constexpr (std::is_same_v<T, ReadOutput>) {
                     if (value.offset > config_.limits.capture_bytes)
                         throw std::runtime_error("offset exceeds capture limit");
@@ -536,7 +551,7 @@ class SessionController {
                         records_->finish(FinishedCommand{execution_->accepted->index,
                                                          execution_->core->result(),
                                                          std::chrono::system_clock::now()});
-                        last_ = records_->result(execution_->accepted->index);
+                        last_ = session_wire::command_report_to_json(*records_->result(execution_->accepted->index));
                         execution_.reset();
                         if (!lifecycle_.stopping())
                             lifecycle_.transition(SessionState::idle);
@@ -653,7 +668,10 @@ class SessionController {
         if (!lifecycle_.stopping())
             lifecycle_.transition(SessionState::closing);
         lifecycle_.transition(SessionState::closed);
-        auto result = records_->recover(snapshot());
+        auto recovery = records_->recover(snapshot());
+        auto result = recovery.session;
+        if (recovery.last)
+            result["last"] = session_wire::command_report_to_json(*recovery.last);
         result["session_state"] = "closed";
         result["stop_reason"] = reason_;
         result["errors"] = errors_;

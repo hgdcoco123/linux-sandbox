@@ -8,9 +8,12 @@
 
 using namespace sandbox;
 
+int checks = 0;
 void require(bool value) {
+    // The ordinal identifies the failing assertion without a debugger.
     if (!value)
-        throw std::runtime_error("store assertion");
+        throw std::runtime_error("store assertion #" + std::to_string(++checks));
+    ++checks;
 }
 
 using Clock = std::chrono::system_clock;
@@ -78,36 +81,45 @@ int main() {
         auto intent = intent_of({"/bin/true"}, "retry-1");
         store.accept(AcceptedCommand{*CommandIndex::parse("cmd-1"), intent, Clock::now(),
                                      fs::path("/tmp")});
-        // Crash before dispatch or snapshot: no speculative re-execution.
-        require(store.replay(intent, nullptr)->at("state") == "uncertain");
-        Json active = {{"command_id", "cmd-1"}, {"state", "running"}};
-        require(store.replay(intent, active)->at("command_id") == "cmd-1");
+        // Crash before dispatch or snapshot: accepted, no outcome, no re-execution.
+        auto pending = store.replay(intent);
+        require(pending && !pending->finished);
+        require(pending->accepted.effective_cwd == fs::path("/tmp"));
         auto conflict = intent_of({"/bin/false"}, "retry-1");
         bool rejected = false;
         try {
-            store.replay(conflict, active);
+            store.replay(conflict);
         } catch (const SessionError &e) {
             rejected = e.code == "REQUEST_CONFLICT";
         }
         require(rejected);
         // A request that was never accepted has no durable answer.
-        require(!store.replay(intent_of({"/bin/true"}, "never-seen"), nullptr).has_value());
+        require(!store.replay(intent_of({"/bin/true"}, "never-seen")).has_value());
         auto recovered = store.recover({{"session_state", "idle"}, {"current", nullptr}});
-        require(store.result(*CommandIndex::parse("cmd-1")).at("state") == "interrupted");
+        auto interrupted = store.result(*CommandIndex::parse("cmd-1"));
+        require(interrupted && interrupted->finished);
+        require(std::holds_alternative<Indeterminate>(
+            interrupted->finished->result.outcome.variant()));
         auto first = store.result(*CommandIndex::parse("cmd-1"));
-        store.recover(recovered);
-        require(first == store.result(*CommandIndex::parse("cmd-1")));
+        store.recover(recovered.session);
+        // Recovery is idempotent: the second pass must not rewrite the record.
+        require(encode(*first->finished) ==
+                encode(*store.result(*CommandIndex::parse("cmd-1"))->finished));
         fs::create_directory(run->directory() / "cmd-2");
         auto second = intent_of({"/bin/true"}, "retry-2");
         auto second_index = *CommandIndex::parse("cmd-2");
         store.accept(AcceptedCommand{second_index, second, Clock::now(), fs::path("/tmp")});
         store.finish(finished_of("cmd-2", ExecutionOutcome(Exited{7})));
         // Terminal precedes snapshot: recovery must keep the confirmed exit code.
-        store.recover({{"current", Json{{"command_id", "cmd-2"}}}});
-        require(store.result(second_index).at("exit_code") == 7);
-        require(store.replay(second, nullptr)->at("state") == "finished");
-        require(SessionStore::lookup_request(run->directory(), *RequestKey::parse("retry-2"))
-                    .at("exit_code") == 7);
+        auto after = store.recover({{"current", Json{{"command_id", "cmd-2"}}}});
+        require(after.last && after.last->finished);
+        require(after.last->finished->result.outcome.exit_code() == 7);
+        require(store.result(second_index)->finished->result.outcome.exit_code() == 7);
+        // Deduplication answers from the terminal record, not from the intent.
+        require(store.replay(second)->finished.has_value());
+        require(store.replay(second)->accepted.index == second_index);
+        auto by_request = SessionStore::lookup_request(run->directory(), *RequestKey::parse("retry-2"));
+        require(by_request.finished && by_request.finished->result.outcome.exit_code() == 7);
         // A confirmed result is immutable, even when the new facts look plausible.
         rejected = false;
         try {
@@ -121,16 +133,19 @@ int main() {
         // A record written by the previous storage version stays readable.
         write_legacy_records(run->directory() / "cmd-3");
         auto legacy = SessionStore::lookup_request(run->directory(), *RequestKey::parse("retry-3"));
-        require(legacy.at("state") == "finished" && legacy.at("exit_code") == 0);
-        require(legacy.at("cwd") == "/tmp");
-        require(legacy.at("stdout").at("stored") == 11);
-        // Startup failures keep the exec errno; a cancelled command keeps its cause.
+        require(legacy.finished.has_value());
+        require(legacy.finished->result.outcome.exit_code() == 0);
+        require(legacy.accepted.effective_cwd == fs::path("/tmp"));
+        require(legacy.finished->result.out.saved_bytes == 11);
+        // Startup failures keep the exec errno in the record itself.
         fs::create_directory(run->directory() / "cmd-4");
         store.accept(AcceptedCommand{*CommandIndex::parse("cmd-4"),
                                      intent_of({"/nonexistent"}, "retry-4"), Clock::now(),
                                      fs::path("/tmp")});
         store.finish(finished_of("cmd-4", ExecutionOutcome(StartupFailed{"exec failed", 2})));
-        require(store.result(*CommandIndex::parse("cmd-4")).at("exec_errno") == 2);
+        const auto failed = store.result(*CommandIndex::parse("cmd-4"));
+        const auto *startup = std::get_if<StartupFailed>(&failed->finished->result.outcome.variant());
+        require(startup && startup->exec_errno == 2);
         run->write_json("cmd-2/result.json",
                         {{"command_id", "cmd-2"}, {"state", "finished"}, {"schema_version", 99}});
         rejected = false;
