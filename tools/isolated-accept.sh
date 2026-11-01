@@ -23,8 +23,10 @@ fail() {
     exit 1
 }
 
-original=$(cat "/proc/sys/$sysctl_key" 2>/dev/null) ||
-    fail "cannot read /proc/sys/$sysctl_key (needs a Linux host with that knob)"
+# sysctl names use dots; /proc/sys uses slashes. Ask sysctl rather than rebuilding
+# the path so this cannot drift from the kernel's spelling.
+original=$(sysctl -n "$sysctl_key" 2>/dev/null) ||
+    fail "cannot read $sysctl_key (needs a Linux host with that knob)"
 echo "== $sysctl_key is currently $original"
 
 # Ask for the password once, up front: the restore trap must not block on a prompt.
