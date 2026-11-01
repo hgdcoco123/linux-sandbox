@@ -89,7 +89,7 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 2 | 单次与会话共用一套执行核心 | **完成**。会话每条命令一个 `ExecutionCore`，结果直接是 `ExecutionResult`；`CommandRecord`/`CommandFacts` 不再参与运行时 |
 | 3 | outcome / output / cleanup 三分 | **完成**。`verdict` 与 `summary` 分开，清理失败走 125 而 `summary` 仍可 success |
 | 4 | 进程与 FD 所有权明确 | **完成**。17 种控制消息、`fd_contract`、收发两侧强制校验 |
-| 5 | 隔离准备步骤化 + 逆序回滚 | **部分**。单次执行用 `PrepareSequence`；**会话准备仍是内联流程、无 journal**；策略身份已进结果，但策略本身仍是兼容型拒绝列表 |
+| 5 | 隔离准备步骤化 + 逆序回滚 | **部分**。单次与会话**都已接 `PrepareSequence`**（会话的失败原因与回滚失败分开记录）；策略身份已进结果，但策略本身仍是兼容型拒绝列表 |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
 | 8 | workspace 与 runtime 边界 | **部分**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()` 已生效；**运行期 `/output` 没有字节/条目配额**（`/work`、`/tmp` 是内核强制的 tmpfs） |

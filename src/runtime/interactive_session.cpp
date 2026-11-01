@@ -7,6 +7,7 @@
 #include "sandbox/session_policy.hpp"
 #include "sandbox/session_safety.hpp"
 #include "sandbox/session_state.hpp"
+#include "sandbox/core/prepare.hpp"
 #include "sandbox/session_store.hpp"
 #include "sandbox/session_wire.hpp"
 #include "sandbox/snapshot.hpp"
@@ -69,6 +70,11 @@ class SessionController {
     std::unique_ptr<WorkspaceService> workspace_;
     // Snapshot copies this session made of /input; removed with the workspace.
     std::vector<fs::path> input_snapshots_;
+    fs::path rootfs_;
+    // Undo failures from the preparation journal, recorded apart from the reason the
+    // session could not start.
+    std::vector<CleanupFailure> prepare_rollback_failures_;
+    bool preparation_failed_ = false;
     SessionLifecycle lifecycle_;
     Json last_ = nullptr;
     // The live summary of the command in flight. Once it is finished the durable
@@ -497,29 +503,99 @@ class SessionController {
             std::make_unique<WorkspaceService>(store_->directory() / "workspace", *records_,
                                                config_.workspace);
         try {
-            auto rootfs = store_->directory() / "rootfs";
-            checked(::mkdir(rootfs.c_str(), 0700), "create session rootfs");
-            auto workspace = store_->directory() / "workspace";
-            checked(::mkdir(workspace.c_str(), 0700), "create workspace");
-            if (config_.mode == "isolated")
-                config_.mounts.push_back({workspace, "/output", false});
-            // Snapshot /input before the launcher exists and before the effective
-            // config is published, so config.json describes what actually ran.
-            input_snapshots_ = snapshot_inputs(config_, store_->directory());
-            store_->write_json("config.json", config_.to_json());
-            store_->state(RunState::preparing);
-            server_ = std::make_unique<ControlServer>(store_->directory() / "control.sock");
-            persist();
-            if (config_.mode == "isolated") {
-                group_ =
-                    std::make_unique<CgroupV2>(config_.cgroup_root, store_->id(), config_.limits);
-                sampler_ = std::make_unique<MetricsSampler>(
-                    group_->path(), MetricRegistry::defaults(), config_.metrics.interval_ms,
-                    config_.metrics.history_limit);
+            // Preparation is journaled exactly like a single run: a step that already
+            // succeeded is undone in reverse when a later one fails, the reason the
+            // session could not start is reported separately from the rollback
+            // failures, and the state directory itself is never undone (the report
+            // has to live somewhere).
+            std::vector<PrepareStepSpec> steps;
+            steps.push_back({PrepareStep::state_root,
+                             [this] {
+                                 rootfs_ = store_->directory() / "rootfs";
+                                 checked(::mkdir(rootfs_.c_str(), 0700), "create session rootfs");
+                                 auto workspace = store_->directory() / "workspace";
+                                 checked(::mkdir(workspace.c_str(), 0700), "create workspace");
+                                 if (config_.mode == "isolated")
+                                     config_.mounts.push_back({workspace, "/output", false});
+                             },
+                             [this] {
+                                 std::error_code failure;
+                                 fs::remove_all(rootfs_, failure);
+                                 if (failure)
+                                     throw std::runtime_error("rootfs: " + failure.message());
+                                 fs::remove_all(store_->directory() / "workspace", failure);
+                                 if (failure)
+                                     throw std::runtime_error("workspace: " + failure.message());
+                             }});
+            steps.push_back({PrepareStep::control_socket,
+                             [this] {
+                                 store_->state(RunState::preparing);
+                                 server_ = std::make_unique<ControlServer>(
+                                     store_->directory() / "control.sock");
+                                 persist();
+                             },
+                             [this] { server_.reset(); }});
+            steps.push_back({PrepareStep::cgroup,
+                             [this] {
+                                 if (config_.mode != "isolated")
+                                     return;
+                                 group_ = std::make_unique<CgroupV2>(config_.cgroup_root,
+                                                                     store_->id(), config_.limits);
+                                 sampler_ = std::make_unique<MetricsSampler>(
+                                     group_->path(), MetricRegistry::defaults(),
+                                     config_.metrics.interval_ms, config_.metrics.history_limit);
+                             },
+                             [this] {
+                                 if (!group_)
+                                     return;
+                                 try {
+                                     group_->kill_all();
+                                     group_->remove();
+                                 } catch (...) {
+                                 }
+                                 group_.reset();
+                                 sampler_.reset();
+                             }});
+            steps.push_back(
+                {PrepareStep::input_snapshot,
+                 [this] { input_snapshots_ = snapshot_inputs(config_, store_->directory()); },
+                 [this] {
+                     for (const auto &directory : input_snapshots_) {
+                         std::error_code failure;
+                         fs::remove_all(directory, failure);
+                         if (failure)
+                             throw std::runtime_error("input snapshot: " + failure.message());
+                     }
+                     input_snapshots_.clear();
+                 }});
+            steps.push_back({PrepareStep::launcher,
+                             [this] {
+                                 // The effective configuration is only final once the
+                                 // input snapshot exists, so it is published here,
+                                 // immediately before the launcher reads it.
+                                 store_->write_json("config.json", config_.to_json());
+                                 auto null = open_path("/dev/null", O_RDWR);
+                                 launcher_ = std::make_unique<LauncherClient>(
+                                     config_, launcher_path_, rootfs_, null.get(), null.get(),
+                                     null.get());
+                             },
+                             [this] {
+                                 if (launcher_) {
+                                     try {
+                                         launcher_->abort();
+                                     } catch (...) {
+                                     }
+                                 }
+                                 launcher_.reset();
+                             }});
+            PrepareSequence preparation{std::move(steps)};
+            auto prepared = preparation.run();
+            if (!prepared.ok) {
+                preparation_failed_ = true;
+                prepare_rollback_failures_ = prepared.rollback_failures;
+                // The original reason, not the rollback's: what stopped the session.
+                throw std::runtime_error(describe(prepared));
             }
-            auto null = open_path("/dev/null", O_RDWR);
-            launcher_ = std::make_unique<LauncherClient>(config_, launcher_path_, rootfs,
-                                                         null.get(), null.get(), null.get());
             while (true) {
                 if (execution_)
                     execution_->drain();
@@ -607,7 +683,9 @@ class SessionController {
             }
         } catch (const std::exception &e) {
             errors_.push_back(e.what());
-            reason_ = "host_error";
+            // A session that never started is not the same failure as one that broke
+            // while running; the stop reason has to say which.
+            reason_ = preparation_failed_ ? "prepare_failed" : "host_error";
             if (lifecycle_.state() != SessionState::failed)
                 lifecycle_.transition(SessionState::failed);
         }
@@ -648,7 +726,8 @@ class SessionController {
             } catch (const std::exception &e) {
                 errors_.push_back(e.what());
             }
-        ::rmdir((store_->directory() / "rootfs").c_str());
+        if (!rootfs_.empty())
+            ::rmdir(rootfs_.c_str());
         if (!lifecycle_.stopping())
             lifecycle_.transition(SessionState::closing);
         lifecycle_.transition(SessionState::closed);
@@ -659,6 +738,13 @@ class SessionController {
         result["session_state"] = "closed";
         result["stop_reason"] = reason_;
         result["errors"] = errors_;
+        if (!prepare_rollback_failures_.empty()) {
+            auto failures = result.value("cleanup_errors", Json::array());
+            for (const auto &failure : prepare_rollback_failures_)
+                failures.push_back(std::string("rollback ") + cleanup_stage_name(failure.stage) +
+                                   ": " + failure.detail);
+            result["cleanup_errors"] = failures;
+        }
         result["metrics"] = metrics_report();
         // Retention is policy, and a failed removal is reported rather than
         // hidden: silently keeping a workspace the caller asked to drop is the

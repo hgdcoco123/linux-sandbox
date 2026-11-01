@@ -85,9 +85,11 @@
 - **seccomp 的 runtime 专用策略（未实现）**：当前是 `SCMP_ACT_ALLOW` + 拒绝列表的兼容型策略，
   结果里只记录了策略名与规则集版本。针对明确支持的 runtime 做经测试的 allowlist 是独立工程
   （需要对该 runtime 的 syscall 集合做 profiling 并用隔离环境验收），不是重构能顺带完成的。
-- **会话准备仍不是 `PrepareSequence`**：单次执行的准备是步骤化 + 逆序回滚；会话的准备写在
-  `SessionController::run()` 里，失败时靠收尾代码清理，没有 journal，因此"失败到了哪一步、
-  撤销了哪些"无法从结果里读出来。
+- **会话准备已接 `PrepareSequence`**（本轮完成）：步骤 = state_root / control_socket / cgroup /
+  input_snapshot / launcher，失败按逆序撤销；`errors` 里保留原始失败原因（`preparation failed
+  at <step>: <reason> (undone: …)`），回滚失败单独进 `cleanup_errors`（`rollback <stage>: …`），
+  `stop_reason` 用 `prepare_failed` 与运行期失败区分。`tests/session_prepare.py` 注入两个失败点
+  （末步 launcher、中间步 cgroup）验证这三件事。
 - P7 批次接入执行核心（**已定为范围外**：批次属于多运行编排；做的话按"子运行落
   `FinishedCommand` 记录、批次解码记录而非匹配 `summary` 字符串"的方式）
 - 隔离路径（`tools/delegated_run.py`）只在放开 `kernel.apparmor_restrict_unprivileged_userns`

@@ -155,6 +155,9 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/launch_contract_tests.py)
   add_test(NAME batch_sdk COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/batch_sdk_tests.py)
+  add_test(NAME session_prepare COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_prepare.py $<TARGET_FILE:sandbox>)
+  set_tests_properties(session_prepare PROPERTIES TIMEOUT 60)
   add_test(NAME sessions COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/sessions.py $<TARGET_FILE:sandbox>)
   set_tests_properties(sessions PROPERTIES TIMEOUT 120)
