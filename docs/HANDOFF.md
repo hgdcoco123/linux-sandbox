@@ -7,9 +7,21 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | `D:\cpp_project\linux-sandbox`（工作目录唯一权威） |
-| 提交 | `ec5e441`，工作区干净 |
-| 测试 | **32/32 通过**，Linux 7.0 内核实机，连跑 4 次稳定 |
+| 提交 | `4d1c802`，工作区干净；本轮在 `ec5e441` 之后落了 7 个提交（见 §1.1） |
+| 测试 | **32/32 通过**，Linux 7.0 内核实机；每项改动后连跑 4 次稳定，最后一次还做了独立目录的全新构建（`build-clean`） |
 | 跳过项 | `isolation_integration`（无 cgroup 委派时的预期行为，不是失败） |
+
+### 1.1 本轮（`ec5e441` 之后）的 7 个提交
+
+| 提交 | 内容 |
+|---|---|
+| `7c608e8` | 会话命令按类型化记录落盘（v3 记录格式，v2 只读兼容） |
+| `c4aa6fd` | `/input` 的 `snapshot_copy`：launcher 之前复制，默认仍是只读绑定 |
+| `acc43b2` | Protobuf 直接解成业务请求，控制器只收一个处理函数 |
+| `fa2c51c` | 复制循环改用 `admit()`，拒绝原因进错误文本 |
+| `eeef4ea` | 会话每条命令一个 `ExecutionCore`；`CommandRecord`/`CommandFacts` 退出运行时 |
+| `6cb8bd5` | 删除遗留 `CommandRecord`/`CommandFacts`/`StopReason`/`CommandPhase` |
+| `4d1c802` | `SessionStore` 返回类型化 `CommandReport`，回包渲染搬到 wire 层 |
 
 工作副本在 `C:\Users\lipinzheng\documents\deepseek-harness\default-workspace\sbx`（同一个 git 仓库的 clone，分支 `master`）。
 
