@@ -9,7 +9,7 @@
 | 仓库 | `D:\cpp_project\linux-sandbox`（工作目录唯一权威） |
 | 提交 | `4d1c802`，工作区干净；本轮在 `ec5e441` 之后落了 7 个提交（见 §1.1） |
 | 测试 | **32/32 通过**（`b127f4c`，独立目录全新构建 0 error），每项改动后连跑 4–5 次稳定 |
-| 隔离验收 | 全绿过一次：`tools/delegated_run.py` 输出 `isolated integration passed` / `isolated /input snapshot passed` / `isolated batch smoke passed`，status=0。**那次是在 `7f9279d`（init 合并）之前**，之后未再跑 |
+| 隔离验收 | **最新一次全绿**（`0674c26`，通过 `tools/isolated-accept.sh`）：六条成功行全部出现，含 `workspace quota, export and failure reporting passed`，服务 status=0，sysctl 按原值恢复。更早的 `7f9279d` 之前那轮已不再代表当前状态 |
 | 跳过项 | 不放开 `kernel.apparmor_restrict_unprivileged_userns` 时 `isolation_integration` 会 skip，这是预期行为，**但 skip 等于没测** |
 
 ### 1.1 本轮（`ec5e441` 之后）的 7 个提交
@@ -92,7 +92,7 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 5 | 隔离准备步骤化 + 逆序回滚 | **部分**。单次与会话**都已接 `PrepareSequence`**（会话的失败原因与回滚失败分开记录）；策略身份已进结果，但策略本身仍是兼容型拒绝列表 |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
-| 8 | workspace 与 runtime 边界 | **部分**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()` 已生效；**运行期 `/output` 没有字节/条目配额**（`/work`、`/tmp` 是内核强制的 tmpfs） |
+| 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()`、**隔离会话语义下的 `/output` tmpfs 配额（会话累计，内核强制）**、`/transfer` 双向移交与三类结果分开报告均已生效 |
 | 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
 | 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留；连续会话 100 条命令的 FD/子进程/内存增长有界 |
 
@@ -121,7 +121,7 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - `workspace.input = "snapshot_copy"` 时，`snapshot_inputs()`（`src/storage/artifacts.cpp`）在 launcher 启动前把每个 `/input` 挂载点的宿主目录复制到 `<run>/input`，并把 `RunConfig.mounts[].source` 改指向副本。之后下游（launcher、init、mount）只看到副本。
 - 复制**复用** `file_request` 的 snapshot 路径，因此继承同一套语义：祖先目录不跟随符号链接、拒绝符号链接/硬链接/特殊文件、边读边校验文件未被修改、staging 目录 + `renameat2(NOREPLACE)` 原子发布。失败时保留 staging 目录用于诊断，不降级成绑定。
 - 单次执行里它是 `PrepareStep::input_snapshot`（插在 `output_capture` 与 `launcher` 之间，因为 launcher 拿的就是挂载源），撤销时删除副本；会话路径在 `RunStore` 之后、`LauncherClient` 之前调用，关闭时随 workspace 一起删除，删除失败追加进 `cleanup_errors`。
-- 验证边界要说清楚：process 模式本来就不允许 mounts，所以 `/input` 只有 isolated 模式才存在；本机 `apparmor_restrict_unprivileged_userns=1`，`sandbox doctor` 的探测卡在 `make_mounts_private`（EACCES，DEPLOYMENT.md 第 9 行记的同一件事），隔离路径从来没在这台机器上起来过。
+- 验证边界：process 模式不允许 mounts，所以 `/input` 只有 isolated 模式才存在。隔离路径需要一个可委派的 cgroup 和放开 `kernel.apparmor_restrict_unprivileged_userns`；`tools/isolated-accept.sh` 把这个过程（含按原值恢复 sysctl、跳过即判失败）都包住了。
 - **已全部验到**（同一台机器，用户临时 `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` 之后跑
   `tools/delegated_run.py --test-runtime ...`）：`isolated integration passed`、
   `isolated session smoke passed`、`isolated /input snapshot passed`、`isolated batch smoke passed`，

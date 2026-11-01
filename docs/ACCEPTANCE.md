@@ -47,7 +47,20 @@ systemd-run --user --wait --pipe --collect -p Delegate=yes -p Type=exec \
 ```
 
 期望：`isolated integration passed`、`process sessions and artifact regression passed`、
-`isolated session smoke passed`、`Finished with result: success`。
+`isolated session smoke passed`、`isolated /input snapshot passed`、
+`workspace quota, export and failure reporting passed`、`isolated batch smoke passed`、
+`Finished with result: success`。
+
+更省事的方式：
+
+```bash
+bash tools/isolated-accept.sh
+```
+
+它保存当前的 `kernel.apparmor_restrict_unprivileged_userns`、临时放开、跑上面全套、按**原值**
+恢复（成功、失败、Ctrl-C 都恢复），并且**把跳过当失败**：逐条核对上面的成功行，出现
+`NOT EXECUTED` 直接判失败。
+
 
 ## 4. 出问题时请回传这些
 
@@ -90,9 +103,10 @@ exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
 ## 6. 已知未覆盖
 
 - 崩溃/掉电恢复、磁盘故障、长期泄漏、并发竞争
-- `/input` 的 `snapshot_copy`：**已端到端验过**——用户临时放开
-  `kernel.apparmor_restrict_unprivileged_userns` 后跑 `tools/delegated_run.py` 全绿，含
-  `isolated /input snapshot passed`（沙箱内看不到宿主后续修改）。不放开该开关时只能验宿主侧那半段（复制、原子发布、按 `keep_on_close` 保留/删除）
+- `/input` 的 `snapshot_copy`、隔离会话 `/output` 的 tmpfs 配额（会话累计、内核强制）、
+  `/transfer` 双向移交与导出失败报告：**均已端到端验过**（`0674c26`，`bash tools/isolated-accept.sh`
+  全绿，服务 status=0）。不放开 AppArmor 开关时只能验宿主侧那半段（复制、原子发布、
+  按 `keep_on_close` 保留/删除）
 - `session_wire` 的**回包方向**仍是「类型化记录 → 渲染成 JSON → Protobuf」，见 MIGRATION_SESSION 第 4 步
 - 两份 pid-1 实现只剩环境准备共享，命令循环仍各写一份
 

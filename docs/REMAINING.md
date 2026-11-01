@@ -78,10 +78,15 @@
 
 仍待做：
 
-- **运行期 workspace 配额（未实现，真实缺口）**：`admit()` 与 `WorkspacePolicy` 管的是**复制**
-  的预算；目标程序运行期间往 `/output`（会话 workspace 的绑定）写文件**没有任何强制限制**。
-  `/work`、`/tmp` 是 `size=limits.tmp_bytes` 的 tmpfs，由内核强制；`/output` 是宿主目录绑定，
-  大小与文件数都不受约束。两种可行做法见下面"运行期配额的两条路"。
+- **运行期 workspace 配额：已实现（tmpfs，不接受扫描方案）**。隔离会话的 `/output` 是
+  `size=workspace.max_bytes` + `nr_inodes=workspace.max_entries` 的 tmpfs，配额**累计整个会话**、
+  由内核强制，不存在按命令重置的路径，也没有任何抽样扫描。宿主看不到 namespace 里的 tmpfs，
+  所以数据经 `/transfer` 双向移交：上传先暂存再由沙箱取走，读取（manifest/export/关闭时保留）
+  先让沙箱交出整棵树再原子发布；移交失败会记进 `workspace.export` 与 `errors`，`keep_on_close`
+  时不会报成功。四类用例（容量耗尽、inode 耗尽、导出失败、init 中途被杀）在
+  `tests/workspace_quota.py`，随 `tools/isolated-accept.sh` 一起跑，跳过即判失败。
+- **runtime 布局新增 `transfer` 占位目录**：工作区挂载点在 runtime 里，因为 runtime 在装挂载前
+  已被递归设为只读。旧 runtime 需要用 `tools/make_runtime.py` 重新生成。
 - **seccomp 的 runtime 专用策略（未实现）**：当前是 `SCMP_ACT_ALLOW` + 拒绝列表的兼容型策略，
   结果里只记录了策略名与规则集版本。针对明确支持的 runtime 做经测试的 allowlist 是独立工程
   （需要对该 runtime 的 syscall 集合做 profiling 并用隔离环境验收），不是重构能顺带完成的。
@@ -95,38 +100,6 @@
 - 隔离路径（`tools/delegated_run.py`）只在放开 `kernel.apparmor_restrict_unprivileged_userns`
   的机器上跑得起来；最后一次全绿是在 init 合并**之前**，合并后未重跑
 
-### 运行期配额的两条路
-
-| 方案 | 内容 | 代价 |
-|---|---|---|
-| A. tmpfs + 收尾导出 | `/output` 挂 `size=workspace.max_bytes,nr_inodes=max_entries` 的 tmpfs，由内核强制；命令/会话结束时由 init 把树拷回宿主绑定（复用同一套"拒绝符号链接/特殊文件/边读边校验"的复制语义） | 复制语义要在 in-namespace 侧可用；init 多一个收尾步骤；`keep_on_close`/导出仍以宿主副本为准 |
-| B. 宿主侧扫描兜底 | 监督循环里周期性统计 workspace 的字节与条目数，超预算即停止命令并把超限记进 `cleanup` 失败 | 不是硬配额：快速写入者可在两次采样之间超出（100ms 采样 ≈ 上百 MB 的过冲），且扫描有成本 |
-
-建议 A：只有它将"运行期配额"变成内核强制的事实，而不是报告里的近似值；B 可以作为 A 落地前的临时措施，但结论必须写明"这是过冲有界的近似，不是配额"。
-
-已决定不做（理由见 REDESIGN §4.1，不要重新论证）：
-
-- 回包 payload 类型化（`RawReply{Json}`）
-- per-command `metrics` 进记录
-- `RunReport` 改成由 `ExecutionResult` 直接序列化
-
-已完成：
-
-- 复制循环改用 `admit()`：容量/条目/深度/结构拒绝的判定只在 `core/workspace` 一处，
-  拒绝原因直接进错误文本（`entry_limit` / `byte_limit` / `symlink` / `hardlink` / `not_regular`）
-- 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败追加进 `cleanup_errors`
-- `/input` 的 `snapshot_copy`：复制在 launcher 前完成，见 `snapshot_inputs()`
-
-'## 本机可复现的验证
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools/cross-verify.ps1 `
-    -Zig <zig.exe> -HostWork <含 sysroot 与 protobuf 预编译对象的目录>
-```
-
-四段：可移植测试 → 全部 Linux 翻译单元与测试源码编译 → 链接 `sandbox`、`sandbox-launcher`
-→ 链接全部测试可执行文件。数量随文件增减变化，脚本不写死。
-第三步是关键：逐文件编译通过仍可能留下未定义或重复符号，链接才证明整棵树自洽。
 
 ## 实机验收
 
