@@ -34,6 +34,9 @@ class RunSession {
     StateMachine state_;
     RunReport report_;
     std::unique_ptr<ExecutionCore> core_;
+    // Budget for an unconfirmed stop; the loop reports instead of spinning.
+    Millis stop_started_{0};
+    std::int64_t stop_budget_ms_ = 2000;
     std::unique_ptr<RunStore> store_;
     std::unique_ptr<ControlServer> control_;
     std::shared_ptr<spdlog::logger> logger_;

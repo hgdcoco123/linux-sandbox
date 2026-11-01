@@ -480,6 +480,18 @@ void RunSession::supervise(SignalSource &signals) {
         }
         sample_metrics(); // Cancel/deadline decisions above are independent of sampling cadence.
         apply(core_->tick(now));
+        // A stop that never settles must still end. Spinning here is the worst
+        // outcome: the caller waits forever instead of learning that the stop was
+        // not confirmed, and "unknown" is supposed to be a reportable result.
+        const auto phase = core_->phase();
+        if (phase == Phase::stopping || phase == Phase::draining) {
+            if (stop_started_.count() == 0)
+                stop_started_ = now;
+            else if ((now - stop_started_).count() > stop_budget_ms_)
+                apply(core_->supervisor_failed("stop did not settle within the cleanup budget", now));
+        } else {
+            stop_started_ = Millis{0};
+        }
         if (core_->finished())
             break;
     }
