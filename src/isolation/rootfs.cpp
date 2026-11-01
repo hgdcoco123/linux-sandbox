@@ -68,8 +68,15 @@ void RootfsBuilder::build(const RunConfig &c, const fs::path &root) {
         mount_call("tmpfs", root / "output", "tmpfs", MS_NOSUID | MS_NODEV, quota.c_str());
         // The only host path visible here besides the runtime and /input: data
         // crosses the boundary through it, in both directions, on request.
+        //
+        // The mountpoint has to be part of the runtime layout: everything here is
+        // already read-only, so creating it now would modify the runtime and fail.
         auto transfer = root / "transfer";
-        checked(::mkdir(transfer.c_str(), 0700), "create transfer mountpoint");
+        struct stat existing{};
+        if (::lstat(transfer.c_str(), &existing) < 0 || !S_ISDIR(existing.st_mode))
+            throw std::runtime_error(
+                "runtime has no plain 'transfer' placeholder: regenerate it with "
+                "tools/make_runtime.py (the workspace mount needs a mountpoint)");
         mount_call(c.workspace_transfer.c_str(), transfer, nullptr, MS_BIND);
         attributes(transfer, false, true);
     }

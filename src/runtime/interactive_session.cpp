@@ -547,7 +547,8 @@ class SessionController {
             } else if (auto *error = std::get_if<InitError>(&envelope.message)) {
                 // init reports *why* it gave up; folding that into "unexpected
                 // message" throws away the only evidence a session startup has.
-                errors_.push_back("init: " + error->message);
+                // Recorded by the caller's catch: pushing here would report the
+                // same failure twice.
                 throw std::runtime_error("init: " + error->message);
             } else if (std::holds_alternative<InitDone>(envelope.message)) {
                 done_ = true;
