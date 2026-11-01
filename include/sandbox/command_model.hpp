@@ -54,37 +54,4 @@ class ExecuteRequest {
     // Request identity preserves presence and the original cwd spelling.
     bool same_intent(const ExecuteRequest &) const;
 };
-enum class StopReason {
-    exited,
-    cancelled,
-    timed_out,
-    session_closed,
-    startup_failed,
-    supervision_failed
-};
-const char *stop_reason_name(StopReason);
-struct CommandFacts {
-    CommandId id;
-    std::optional<int> exit_code, signal, exec_errno;
-    StopReason reason;
-    std::chrono::milliseconds elapsed;
-    static CommandFacts parse(const Json &);
-};
-enum class CommandPhase { running, draining, finished };
-struct CommandRecord {
-    CommandId id;
-    std::optional<RequestId> request_id;
-    std::vector<std::string> argv;
-    fs::path cwd;
-    CommandPhase phase = CommandPhase::running;
-    std::optional<CommandFacts> facts;
-    StreamReport out, err;
-    Json metrics = nullptr; // extensible observational schema, never used for state transitions
-    CommandRecord(CommandId id, const ExecuteRequest &request, const RunConfig &effective)
-        : id(std::move(id)), request_id(request.request_id), argv(effective.argv),
-          cwd(effective.cwd) {}
-    void apply(CommandFacts);
-    void finish(StreamReport, StreamReport, Json metrics);
-    Json json() const;
-};
 } // namespace sandbox

@@ -30,21 +30,6 @@ int main() {
         rejects([] { CommandId::parse("cmd-x"); });
         RunConfig config;
         config.argv = {"/bin/true"};
-        CommandRecord record(CommandId::parse("cmd-1"), request, config);
-        Json facts = {{"command_id", "cmd-1"},
-                      {"exit_code", 0},
-                      {"signal", nullptr},
-                      {"exec_errno", nullptr},
-                      {"stop_reason", "main_exited"},
-                      {"execution_ms", 1}};
-        record.apply(CommandFacts::parse(facts));
-        rejects([&] { record.apply(CommandFacts::parse(facts)); });
-        StreamReport out;
-        out.eof = true;
-        rejects([&] { record.finish(out, out, Json::object()); });
-        out.flushed = true;
-        record.finish(out, out, Json::object());
-        require(record.json().at("state") == "finished" && record.json().at("exit_code") == 0);
         BatchSpec batch{2, {300, 30}, {}};
         for (unsigned n : {100, 250, 50}) {
             config.limits.memory_bytes = n;
