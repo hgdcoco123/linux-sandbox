@@ -135,7 +135,14 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
         for _ in range(100):
             command = session.execute(["/bin/sh", "-c", "printf x"])
             assert command.wait(5)["exit_code"] == 0
+        # wait() returns when the result is written, which is a moment before the
+        # supervisor releases that command's captures. Sample the settled state, not
+        # the transient one.
+        deadline = time.monotonic() + 5
         after = inventory()
+        while time.monotonic() < deadline and after[0] > base[0] + 2:
+            time.sleep(0.05)
+            after = inventory()
         assert after[0] <= base[0] + 2, (base, after)
         assert after[1] == base[1], (base, after)
         assert after[2] <= base[2] + 4096, (base, after)
