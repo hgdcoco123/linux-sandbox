@@ -114,6 +114,42 @@ int main() {
             bound.mounts.push_back({host, "/input", true});
             require(snapshot_inputs(bound, state).empty());
             require(bound.mounts[0].source == host);
+            // The copier applies the *configured* budget through the same
+            // admission policy the unit tests cover, rather than its own copy.
+            auto many = snapshot_root / "many";
+            fs::create_directory(many);
+            for (auto name : {"a", "b", "c"})
+                std::ofstream(many / name) << "x";
+            auto limited_state = snapshot_root / "state3";
+            fs::create_directory(limited_state);
+            RunConfig limited;
+            limited.mode = "process";
+            limited.workspace.input = InputMode::snapshot_copy;
+            limited.workspace.max_entries = 2;
+            limited.mounts.push_back({many, "/input", true});
+            bool refused_entries = false;
+            try {
+                snapshot_inputs(limited, limited_state);
+            } catch (const std::exception &failure) {
+                refused_entries = std::string(failure.what()).find("entry_limit") !=
+                                  std::string::npos;
+            }
+            require(refused_entries);
+            auto byte_state = snapshot_root / "state4";
+            fs::create_directory(byte_state);
+            RunConfig tiny;
+            tiny.mode = "process";
+            tiny.workspace.input = InputMode::snapshot_copy;
+            tiny.workspace.max_bytes = 1;
+            tiny.mounts.push_back({many, "/input", true});
+            bool refused_bytes = false;
+            try {
+                snapshot_inputs(tiny, byte_state);
+            } catch (const std::exception &failure) {
+                refused_bytes = std::string(failure.what()).find("byte_limit") !=
+                                std::string::npos;
+            }
+            require(refused_bytes);
         } catch (...) {
             fs::remove_all(snapshot_root);
             throw;

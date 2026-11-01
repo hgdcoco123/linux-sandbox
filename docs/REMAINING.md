@@ -72,12 +72,13 @@ seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-s
 
 仍待做：
 
-- `src/storage/artifacts.cpp` 的复制循环改用 `admit()`（现在用的是等价的就地判断，但决策函数仍是未接线的另一份）
 - `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化
 - `sessions.py` 的 isolated 分支已更新（含 `/input` 快照断言），但本机无 cgroup 委派、跑不到
 
 已完成：
 
+- 复制循环改用 `admit()`：容量/条目/深度/结构拒绝的判定只在 `core/workspace` 一处，
+  拒绝原因直接进错误文本（`entry_limit` / `byte_limit` / `symlink` / `hardlink` / `not_regular`）
 - 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败追加进 `cleanup_errors`
 - `/input` 的 `snapshot_copy`：复制在 launcher 前完成，见 `snapshot_inputs()`
 

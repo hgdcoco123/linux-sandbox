@@ -173,7 +173,7 @@ launcher 步骤的撤销是 `LauncherClient::abort()`。
 | P6 | 控制通道消息类型化 + FD 契约（`core/control`） | `[完成]` |
 | P6.5 | `protocol.cpp`/launcher/init/会话/runsession 全部改用 `ControlMessage` | `[完成]` 控制通道已无 JSON |
 | P7 | 批次调度改用同一执行核心 | `[待做]` |
-| P8.5 | workspace 边界：决策函数 + 配置解析 | `[完成]`；复制器接线待做 |
+| P8.5 | workspace 边界：决策函数 + 配置解析 + 复制器接线 | `[完成]` |
 | P8 | 故障边界测试（截断/位翻转/契约违规/乱序事件/损坏记录） | `[完成]` |
 
 ## 6. 验证方式

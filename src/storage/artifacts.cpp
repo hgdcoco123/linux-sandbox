@@ -7,6 +7,7 @@
 #include <array>
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits>
 #include <sys/stat.h>
 #include <unistd.h>
 namespace sandbox {
@@ -33,9 +34,8 @@ UniqueFd directory(const fs::path &path) {
     return fd;
 }
 void walk(int source, int dest, const std::string &prefix, Budget &budget, Json &manifest) {
-    if (prefix.size() > 4096 ||
-        std::count(prefix.begin(), prefix.end(), '/') > static_cast<int>(budget.policy->max_depth))
-        throw std::runtime_error("artifact directory depth/path limit exceeded");
+    if (prefix.size() > 4096)
+        throw std::runtime_error("artifact path limit exceeded");
     DIR *raw =
         ::fdopendir(checked(::fcntl(source, F_DUPFD_CLOEXEC, 3), "duplicate tree directory"));
     if (!raw)
@@ -46,12 +46,28 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
         std::string name = entry->d_name;
         if (name == "." || name == "..")
             continue;
-        if (++budget.entries > budget.policy->max_entries)
-            throw std::runtime_error("artifact entry limit exceeded");
         struct stat before{};
         checked(::fstatat(source, name.c_str(), &before, AT_SYMLINK_NOFOLLOW), "stat artifact");
         auto path = prefix + name;
-        if (S_ISDIR(before.st_mode)) {
+        // The admission policy is decided in one place (core/workspace) and only
+        // applied here; the copier never re-derives limits of its own.
+        EntryFacts facts;
+        facts.depth = static_cast<std::uint8_t>(
+            std::min<std::size_t>(std::count(path.begin(), path.end(), '/'),
+                                  std::numeric_limits<std::uint8_t>::max()));
+        const bool is_dir = S_ISDIR(before.st_mode);
+        const bool is_reg = S_ISREG(before.st_mode);
+        facts.symlink = S_ISLNK(before.st_mode);
+        facts.hardlink = is_reg && before.st_nlink != 1;
+        facts.regular = is_dir || (is_reg && before.st_nlink == 1);
+        facts.size = is_reg ? static_cast<std::uint64_t>(before.st_size) : 0;
+        const auto admission = admit(*budget.policy, budget.bytes, budget.entries, facts);
+        if (!admission.accepted())
+            throw std::runtime_error(std::string("artifact refused (") +
+                                     rejection_name(admission.rejection) + "): " + path);
+        budget.entries = admission.entries_after;
+        budget.bytes = admission.bytes_after;
+        if (is_dir) {
             UniqueFd child(checked(
                 ::openat(source, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC),
                 "open artifact directory"));
@@ -64,7 +80,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
             }
             manifest.push_back({{"path", path}, {"type", "directory"}});
             walk(child.get(), target.get(), path + "/", budget, manifest);
-        } else if (S_ISREG(before.st_mode)) {
+        } else if (is_reg) {
             UniqueFd input(checked(
                 ::openat(source, name.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC),
                 "open artifact"));
@@ -90,10 +106,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
                 if (!n)
                     break;
                 size += n;
-                budget.bytes += n;
                 digest.update(std::string_view(buf.data(), n));
-                if (budget.bytes > budget.policy->max_bytes)
-                    throw std::runtime_error("artifact byte limit exceeded");
                 if (output)
                     write_all(output.get(), std::string_view(buf.data(), n));
             }
@@ -114,7 +127,7 @@ void walk(int source, int dest, const std::string &prefix, Budget &budget, Json 
             manifest.push_back(
                 {{"path", path}, {"type", "file"}, {"size", size}, {"sha256", digest.hex()}});
         } else
-            throw std::runtime_error("symlinks and special files are rejected: " + path);
+            throw std::runtime_error("artifact refused (not_regular): " + path);
         errno = 0;
     }
     if (errno)
