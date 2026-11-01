@@ -63,6 +63,10 @@ bool OutputCapture::complete() const {
     return s.eof && s.flushed;
 }
 void OutputCapture::close_incomplete() {
+    // Abandoning the producer ends production for our purposes: without this the
+    // stream never reports eof after a forced drain, the supervisor waits for a
+    // fact that cannot arrive, and the run only ends at the cleanup deadline.
+    eof_ = true;
     source_.reset();
     writer_->close();
 }
