@@ -51,10 +51,14 @@ with tempfile.TemporaryDirectory(prefix="sbx-quota-") as temporary:
     config = root / "bytes.json"
     config.write_text(json.dumps(config_for({"max_bytes": 65536, "keep_on_close": True})))
     session = client.create(config)
-    over = session.execute([fixture, "fill-bytes", "262144"]).wait(15)
+    # Within the budget first: the limit is a ceiling, not a ban. Order matters
+    # because the quota is cumulative - once the session has filled the workspace,
+    # later writes fail no matter how small they are.
+    assert session.execute([fixture, "fill-bytes", "1024", "small"]).wait(10)["exit_code"] == 0
+    over = session.execute([fixture, "fill-bytes", "262144", "big"]).wait(15)
     assert over["exit_code"] == 60, over
-    # Within the budget the same command succeeds: the limit is a ceiling, not a ban.
-    assert session.execute([fixture, "fill-bytes", "1024"]).wait(10)["exit_code"] == 0
+    # The session itself survives the quota: a command that writes nothing still runs.
+    assert session.execute([fixture, "echo"]).wait(10)["exit_code"] == 0
     exported = root / "bytes-export"
     session.export(exported)
     session.close()
@@ -68,8 +72,9 @@ with tempfile.TemporaryDirectory(prefix="sbx-quota-") as temporary:
     config = root / "inodes.json"
     config.write_text(json.dumps(config_for({"max_entries": 8})))
     with client.create(config) as session:
-        assert session.execute([fixture, "fill-files", "40"]).wait(15)["exit_code"] == 60
+        # Same order rule: a few files fit, many do not.
         assert session.execute([fixture, "fill-files", "3"]).wait(10)["exit_code"] == 0
+        assert session.execute([fixture, "fill-files", "40"]).wait(15)["exit_code"] == 60
     print("inode quota enforced")
 
     # 3. Export failure: when the handover cannot happen the answer must say so,

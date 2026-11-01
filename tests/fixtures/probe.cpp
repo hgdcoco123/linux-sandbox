@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/prctl.h>
@@ -139,7 +140,10 @@ int main(int argc, char **argv) {
     // stopped me" from any other failure.
     if (!std::strcmp(mode, "fill-bytes")) {
         long long wanted = argc > 2 ? std::atoll(argv[2]) : 0;
-        int fd = ::open("/output/fill", O_WRONLY | O_CREAT | O_EXCL, 0600);
+        // A distinct name per call: the quota is cumulative, so a test that fills
+        // the workspace once and then writes again must not collide on the name.
+        std::string name = std::string("/output/") + (argc > 3 ? argv[3] : "fill");
+        int fd = ::open(name.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
         if (fd < 0)
             return 61;
         char block[65536];
@@ -168,6 +172,10 @@ int main(int argc, char **argv) {
             int fd = ::open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
             if (fd < 0) {
                 int saved = errno;
+                // Files from an earlier call in the same session are already there;
+                // only running out of inodes is the answer this probe is after.
+                if (saved == EEXIST)
+                    continue;
                 return (saved == ENOSPC || saved == EDQUOT) ? 60 : 63;
             }
             ::close(fd);
