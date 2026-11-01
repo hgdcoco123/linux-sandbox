@@ -2,6 +2,7 @@
 #include "sandbox/core/ops_json.hpp"
 #include "sandbox/event_loop.hpp"
 #include "sandbox/interactive.hpp"
+#include "sandbox/isolation.hpp"
 #include "sandbox/session.hpp"
 #include "sandbox/session_policy.hpp"
 #include "sandbox/session_safety.hpp"
@@ -259,6 +260,7 @@ class SessionController {
         // prepared, so this command starts directly in the running phase.
         prepared->core = std::make_unique<ExecutionCore>(command_limits(command),
                                                          Millis{static_cast<std::int64_t>(started)});
+        prepared->core->result().security = security_policy_id(config_);
         // Durable acceptance is the boundary after which this request cannot be rerun.
         records_->accept(*prepared->accepted);
         execution_ = std::move(prepared);

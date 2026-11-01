@@ -202,21 +202,26 @@ Json encode(const AcceptedCommand &accepted) {
 }
 
 Json encode(const FinishedCommand &finished) {
+    Json result{{"outcome", encode_outcome(finished.result.outcome)},
+                {"stdout", encode_output(finished.result.out)},
+                {"stderr", encode_output(finished.result.err)},
+                {"cleanup", encode_cleanup(finished.result.cleanup)},
+                {"timing", encode_timing(finished.result.timing)}};
+    // An empty policy name means no filter was installed; writing a version for a
+    // policy that does not exist would invent a fact.
+    if (!finished.result.security.name.empty())
+        result["security"] = {{"policy", finished.result.security.name},
+                              {"version", finished.result.security.version}};
     return Json{{"schema_version", record_schema_version},
                 {"index", finished.index.str()},
                 {"finished_at_ms", to_ms(finished.finished_at)},
-                {"result",
-                 Json{{"outcome", encode_outcome(finished.result.outcome)},
-                      {"stdout", encode_output(finished.result.out)},
-                      {"stderr", encode_output(finished.result.err)},
-                      {"cleanup", encode_cleanup(finished.result.cleanup)},
-                      {"timing", encode_timing(finished.result.timing)}}}};
+                {"result", std::move(result)}};
 }
 
 std::optional<AcceptedCommand> decode_accepted(const Json &value, std::string &error) {
     try {
         const int version = value.at("schema_version").get<int>();
-        if (version != record_schema_version) {
+        if (version < record_schema_minimum_readable || version > record_schema_version) {
             error = "unsupported record schema_version " + std::to_string(version);
             return std::nullopt;
         }
@@ -236,7 +241,7 @@ std::optional<AcceptedCommand> decode_accepted(const Json &value, std::string &e
 std::optional<FinishedCommand> decode_finished(const Json &value, std::string &error) {
     try {
         const int version = value.at("schema_version").get<int>();
-        if (version != record_schema_version) {
+        if (version < record_schema_minimum_readable || version > record_schema_version) {
             error = "unsupported record schema_version " + std::to_string(version);
             return std::nullopt;
         }
@@ -248,6 +253,13 @@ std::optional<FinishedCommand> decode_finished(const Json &value, std::string &e
         finished.result.err = decode_output(result.at("stderr"));
         finished.result.cleanup = decode_cleanup(result.at("cleanup"));
         finished.result.timing = decode_timing(result.at("timing"));
+        // Absent in schema 3 records: no policy was recorded, which is not the same
+        // as recording an empty one, but it is all an older record can tell us.
+        if (result.contains("security")) {
+            const auto &security = result.at("security");
+            finished.result.security.name = security.at("policy").get<std::string>();
+            finished.result.security.version = security.value("version", 0u);
+        }
         return finished;
     } catch (const std::exception &failure) {
         error = failure.what();

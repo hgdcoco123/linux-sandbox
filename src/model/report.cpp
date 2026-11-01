@@ -50,6 +50,7 @@ Json RunReport::json() const {
             {"summary", summary},
             {"verdict", verdict},
             {"isolated", isolated},
+            {"security", {{"policy", security.name}, {"version", security.version}}},
             {"runtime_prepared", runtime_prepared},
             {"stop_reason", stop_reason},
             {"exec_observed", exec_observed},

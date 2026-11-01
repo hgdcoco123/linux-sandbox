@@ -115,6 +115,31 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
     assert session.process.returncode == 0
     assert session.request_status('lost-response')['state'] == 'finished'
 
+    # A long-lived session must not accumulate resources per command. Descriptors and
+    # child processes are exact signals: a leak of one descriptor per command would
+    # show up as +100 here. Resident memory is inherently coarse (the allocator may
+    # hold freed buffers), so it gets a bound rather than an equality - it catches
+    # leaks of tens of kilobytes per command, not single bytes.
+    with client.create(config, allow_unsafe=True) as session:
+        def inventory():
+            pid = json.loads((session.directory/"owner.json").read_text())["supervisor_pid"]
+            descriptors = len(os.listdir(f"/proc/{pid}/fd"))
+            children = len(Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
+            page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
+            resident = int(Path(f"/proc/{pid}/statm").read_text().split()[1]) * page_kb
+            return descriptors, children, resident
+
+        for _ in range(10):  # warm up: first commands allocate the steady-state set
+            assert session.execute(["/bin/true"]).wait(5)["exit_code"] == 0
+        base = inventory()
+        for _ in range(100):
+            command = session.execute(["/bin/sh", "-c", "printf x"])
+            assert command.wait(5)["exit_code"] == 0
+        after = inventory()
+        assert after[0] <= base[0] + 2, (base, after)
+        assert after[1] == base[1], (base, after)
+        assert after[2] <= base[2] + 4096, (base, after)
+    print("session resource growth bounded over 100 commands")
     # File policy runs through the same CLI and C++ implementation used by sessions.
     source = root/"input"
     source.mkdir()

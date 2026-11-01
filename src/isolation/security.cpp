@@ -9,6 +9,22 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 namespace sandbox {
+namespace {
+// The rule set below is a policy, not a constant: when it changes, this number
+// changes with it. A result that names the policy but not the rule set cannot be
+// compared against a result produced by a different build.
+constexpr std::uint32_t baseline_rule_set_version = 1;
+} // namespace
+
+SecurityPolicyFacts security_policy_id(const RunConfig &config) {
+    // Only one policy exists and the configuration rejects anything else, so the
+    // identity is the configured name plus the version of the rules that are
+    // actually installed. An unknown name would mean nothing was enforced.
+    if (config.seccomp != "baseline")
+        return SecurityPolicyFacts{};
+    return SecurityPolicyFacts{"baseline", baseline_rule_set_version};
+}
+
 void SecurityPolicy::drop_capabilities() {
     // No credential inheritance across exec, including ambient capabilities.
     checked(::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), "no_new_privs");

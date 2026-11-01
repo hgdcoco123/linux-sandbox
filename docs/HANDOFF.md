@@ -89,12 +89,12 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 2 | 单次与会话共用一套执行核心 | **完成**。会话每条命令一个 `ExecutionCore`，结果直接是 `ExecutionResult`；`CommandRecord`/`CommandFacts` 不再参与运行时 |
 | 3 | outcome / output / cleanup 三分 | **完成**。`verdict` 与 `summary` 分开，清理失败走 125 而 `summary` 仍可 success |
 | 4 | 进程与 FD 所有权明确 | **完成**。17 种控制消息、`fd_contract`、收发两侧强制校验 |
-| 5 | 隔离准备步骤化 + 逆序回滚 | **完成**。`PrepareSequence` |
+| 5 | 隔离准备步骤化 + 逆序回滚 | **完成**。`PrepareSequence`；策略身份进结果（见下） |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
 | 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、容量/条目限制、`/input` 的 `snapshot_copy` 均已生效（默认仍是 `bind_readonly`，不再有兜底切换） |
 | 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
-| 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留等 |
+| 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留；连续会话 100 条命令的 FD/子进程/内存增长有界 |
 
 ## 4. 剩余工作（按建议顺序）
 
@@ -102,7 +102,7 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 
 ### 4.1 `SessionStore` 迁移到类型化记录（**已完成**，不要再做一遍）
 
-落盘形状（`record_schema_version = 3`，与 `schema_version = 2` 的会话快照文件是两套版本）：
+落盘形状（`record_schema_version = 4`；可读下界 `record_schema_minimum_readable = 3`，与 `schema_version = 2` 的会话快照文件是两套版本）：
 
 ```
 cmd-N/request.json   encode(AcceptedCommand)   index / request 意图 / accepted_at_ms / effective_cwd
@@ -179,7 +179,7 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 
 ### 存储
 
-- **两套 `schema_version` 不要混**：会话快照 / artifacts 是 `2`（`SessionStore::write()` 负责盖章），命令记录是 `record_schema_version = 3`（由 `encode()` 自带）。记录文件必须走 `store_.write_json(name, encode(record))`，走过 `write()` 会被改成 2，然后被 `read()` 当成坏记录
+- **两套 `schema_version` 不要混**：会话快照 / artifacts 是 `2`（`SessionStore::write()` 负责盖章），命令记录是 `record_schema_version = 4`（由 `encode()` 自带；解码接受 3..4，新增字段一律可选）。记录文件必须走 `store_.write_json(name, encode(record))`，走过 `write()` 会被改成 2，然后被 `read()` 当成坏记录
 - 回包形状和存储形状是两件事。改记录结构时，`session_store.cpp` 里的 `terminal_reply()` 和 `sdk/session_client.py` 里的 `_record_reply()` 必须一起改，否则「主机活着」和「只有文件」两条路径会给出不同答案
 
 ### 运行时
@@ -219,3 +219,11 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 2. 我写的这个覆盖，在它想覆盖的那行之后吗？
 
 绿基线比新功能重要。任何一步把 32/32 弄红的改动，都应该当场回退，而不是"再改改就好了"。
+
+### 4.6 syscall 策略身份进执行结果（已完成）
+
+`ExecutionResult::security`（`SecurityPolicyFacts{name, version}`）是"目标到底跑在哪个策略下"这个事实：
+`SecurityPolicy` 里 `baseline_rule_set_version` 与规则表放在一起，改规则就必须改版本——两次结果都写
+"baseline" 并不代表可比。空 name 表示没有装过滤器（与"装了默认策略"不是一回事）。
+落盘进 `result.security`，单次执行的报告里也有一份；会话回包没有这个字段，因为
+`proto/session_v1.proto` 里没有位置，加它要重生成 Python pb2。

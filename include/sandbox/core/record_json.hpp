@@ -20,7 +20,13 @@ using Json = nlohmann::json;
 //   2 - first typed record shape (single run only)
 //   3 - adds the session facts: accepted.effective_cwd, cancelled.cause,
 //       startup_failure.exec_errno
-inline constexpr int record_schema_version = 3;
+//   4 - adds result.security: the syscall policy and its rule-set version
+inline constexpr int record_schema_version = 4;
+
+// The oldest shape this build still reads. New versions only add optional fields,
+// so a reader that understands an older shape keeps working - which is why this is
+// a lower bound and not a single accepted number.
+inline constexpr int record_schema_minimum_readable = 3;
 
 Json encode(const AcceptedCommand &);
 Json encode(const FinishedCommand &);

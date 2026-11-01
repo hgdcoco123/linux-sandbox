@@ -71,12 +71,26 @@ struct CleanupResult {
     [[nodiscard]] bool complete() const noexcept { return failures.empty() && descendants_gone; }
 };
 
+// The syscall policy the target actually ran under.
+//
+// Recorded instead of inferred from the configuration: a result that says
+// "baseline" without a version cannot tell you which rule set produced it, and two
+// results are only comparable when the version matches. An empty name means no
+// filter was installed at all, which is a different fact from "the default one".
+struct SecurityPolicyFacts {
+    std::string name;
+    std::uint32_t version = 0;
+
+    friend bool operator==(const SecurityPolicyFacts &, const SecurityPolicyFacts &) = default;
+};
+
 struct ExecutionResult {
     ExecutionOutcome outcome;
     OutputResult out;
     OutputResult err;
     CleanupResult cleanup;
     Timing timing;
+    SecurityPolicyFacts security;
 
     // The target's own outcome, ignoring how the environment was reclaimed.
     [[nodiscard]] bool target_succeeded() const noexcept { return outcome.is_success(); }

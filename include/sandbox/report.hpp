@@ -1,5 +1,6 @@
 #pragma once
 #include "sandbox/config.hpp"
+#include "sandbox/core/result.hpp"
 #include <optional>
 namespace sandbox {
 enum class RunState { created, preparing, starting, running, stopping, finalizing, finished };
@@ -28,6 +29,8 @@ struct RunReport {
     // verdict a caller should branch on.
     std::string verdict = "unknown";
     bool isolated = false, exec_observed = false, descendants_empty = false;
+    // Which syscall policy the target ran under, copied from the execution result.
+    SecurityPolicyFacts security;
     bool launcher_reaped = false, cgroup_removed = false;
     bool runtime_prepared = false;
     std::optional<int> exit_code, term_signal;

@@ -204,6 +204,9 @@ void test_record_round_trip() {
     finished.result.timing.startup = std::chrono::microseconds(1200);
     finished.result.timing.execution = std::chrono::microseconds(3400);
     finished.result.out.saved_bytes = 42;
+    // The syscall policy travels with the result: two runs are only comparable when
+    // the rule-set version matches, so it cannot be inferred from a config file later.
+    finished.result.security = SecurityPolicyFacts{"baseline", 7};
     auto encoded_finished = encode(finished);
     auto decoded_finished = decode_finished(encoded_finished, error);
     check(decoded_finished.has_value(), "finished record decodes");
@@ -212,7 +215,18 @@ void test_record_round_trip() {
         check(decoded_finished->result.out.saved_bytes == 42, "output bytes survive");
         check(decoded_finished->result.cleanup.failures.size() == 1, "cleanup failures survive");
         check(!decoded_finished->result.cleanup.complete(), "cleanup stays incomplete");
+        check(decoded_finished->result.security == SecurityPolicyFacts{"baseline", 7},
+              "security policy identity survives the record");
     }
+    // A record from before the policy was recorded still decodes, and says so by
+    // leaving the facts empty rather than inventing a version.
+    auto legacy_finished = encoded_finished;
+    legacy_finished["schema_version"] = 3;
+    legacy_finished["result"].erase("security");
+    auto legacy = decode_finished(legacy_finished, error);
+    check(legacy.has_value(), "schema 3 record still decodes");
+    if (legacy)
+        check(legacy->result.security.name.empty(), "absent policy stays absent");
 }
 
 void test_corrupt_records() {

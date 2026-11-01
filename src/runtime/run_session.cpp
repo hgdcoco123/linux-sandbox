@@ -1,6 +1,7 @@
 #include "sandbox/core/prepare.hpp"
 #include "sandbox/core/supervisor.hpp"
 #include "sandbox/event_loop.hpp"
+#include "sandbox/isolation.hpp"
 #include "sandbox/session.hpp"
 #include "sandbox/snapshot.hpp"
 #include <fcntl.h>
@@ -142,6 +143,9 @@ void RunSession::mark_stopping() {
 
 void RunSession::prepare() {
     core_ = std::make_unique<ExecutionCore>(core_limits(config_), now_ms());
+    // Which syscall policy this run executes under is a fact about the result, not
+    // something a reader should have to infer from the configuration file.
+    core_->result().security = security_policy_id(config_);
     store_ = RunStore::create(state_root_, config_);
     report_.id = store_->id();
     report_.isolated = config_.mode == "isolated";
@@ -612,6 +616,7 @@ void RunSession::finalize() {
     if (oom && result_unknown_or_signaled(result.outcome))
         report_.summary = "oom";
     report_.verdict = verdict_name(verdict_of(result));
+    report_.security = result.security;
     report_.stop_reason = stop_reason_of(result.outcome);
     // The core only fills the timing when it reaches a conclusion. On a forced
     // shutdown it does not, so fall back to wall clock rather than reporting a
