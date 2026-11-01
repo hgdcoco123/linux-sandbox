@@ -109,13 +109,17 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - 单次执行里它是 `PrepareStep::input_snapshot`（插在 `output_capture` 与 `launcher` 之间，因为 launcher 拿的就是挂载源），撤销时删除副本；会话路径在 `RunStore` 之后、`LauncherClient` 之前调用，关闭时随 workspace 一起删除，删除失败追加进 `cleanup_errors`。
 - 验证边界要说清楚：process 模式本来就不允许 mounts，所以 `/input` 只有 isolated 模式才存在；本机没有 cgroup 委派，`isolation_integration` 一直是跳过。因此这条路径的端到端验证在 `sessions.py` 的 isolated 分支里（需 `SANDBOX_TEST_RUNTIME`/`SANDBOX_TEST_CGROUP`），断言方式是「会话起来后改宿主文件，副本仍是原内容」。**这台虚拟机上没有跑过有真实挂载的用例。**
 
-### 4.3 `session_wire` 类型化（下一步）
+### 4.3 `session_wire` 类型化（**请求方向已完成，回包方向待做**）
 
-- 目标文件：`src/runtime/session_wire.cpp`
-- 现状：Protobuf → JSON → 业务层 → JSON → Protobuf，两层转换
-- 目标：Protobuf → 业务类型 → Protobuf；JSON 只留给 CLI
-- 会牵动：`sdk/` 下的 Python 客户端与 `tests/session_wire_*`、`tests/session_wire_interop`
-- 建议保留 `RawReply` 之类的过渡类型给 `status`/`files`，先切执行路径再切其余
+已完成：
+
+- `decode_session_request(packet)` 直接把 Protobuf 解成 `SessionRequest`，中间不再经过 JSON。原 `decode_execute` / `decode_stdin` / `decode_request(→Json)` 三个解码器合并成一个。
+- 控制器只收一个处理函数：`ControlServer::serve(std::function<Json(const SessionRequest&)>)`。原来 execute/stdin 的旁路回调（`execute_handler` / `stdin_handler`）删掉了——`SessionRequest` 本来就覆盖它们。
+- `session_request_to_json()` 只是**渲染**，供 CLI 与 interop bridge 使用；`decode_request()` = 解码 + 渲染，不再是第二个解码器。
+- **契约收紧（有意为之）**：门的这一侧现在按业务类型校验，所以 `cwd: ""`、`wall_ms: 0`、`cmd-01` 这类值在解码处就返回 `INVALID_REQUEST`，不再走到控制器里才被拒。`session_wire_tests.cpp` 与 `session_wire_interop_tests.py` 的相关 fixture 从"非法值"改成"合法值"，并新增了拒绝断言——断言的是同一件事：两个门对同一个请求给出同一个结论。
+- 批处理控制通道保留自己的 JSON 协议：`serve(typed, json_handler)` 的第二个参数就是给它和 `accept_cancel` 用的。
+
+仍待做（回包方向）：`encode_response` 仍吃 `Json answer`。下一步是给 `SessionReply` 补一个 `RawReply`（status / files 两个只读视图的边界例外），其余回包用 `Accepted` / `OutputChunk` / `ResultReply`，再由 `session_reply_to_json()` 编回旧形状保证 SDK 不变。
 
 ### 4.4 会话控制器接入执行核心（最后，影响面最大）
 

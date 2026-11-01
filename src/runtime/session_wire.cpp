@@ -22,79 +22,216 @@ template <class Message> Message unpack(std::string_view packet) {
         throw SessionError("UNSUPPORTED_VERSION", "supported protobuf protocol version: 1");
     return result;
 }
+// Business types are the only place a validation rule lives; this only turns a
+// rejected request into the error the protocol already understands.
+template <class F> auto business(F f) -> decltype(f()) {
+    try {
+        return f();
+    } catch (const RequestError &failure) {
+        throw SessionError(failure.code, failure.what());
+    }
 }
-std::optional<ExecuteRequest> decode_execute(std::string_view packet) {
-    auto m = unpack<pb::SessionRequest>(packet);
-    if (m.operation_case() != pb::SessionRequest::kExecute) return std::nullopt;
-    if (m.application_version() != 1 && m.application_version() != 2)
-        throw SessionError("UNSUPPORTED_VERSION", "supported protocol versions: 1, 2");
-    const auto &x = m.execute();
-    if (m.application_version() == 2 && !x.has_request_id())
-        throw SessionError("INVALID_REQUEST", "protocol v2 execute requires request_id");
-    std::optional<std::string> id, cwd;
-    std::optional<std::uint64_t> wall;
-    std::optional<std::map<std::string, std::string>> env;
-    if (x.has_request_id()) id = x.request_id();
-    if (x.has_cwd()) cwd = x.cwd();
-    if (x.has_wall_ms()) wall = x.wall_ms();
-    if (x.has_env()) { env.emplace(); for (const auto &e : x.env().values()) env->emplace(e.first, e.second); }
-    return ExecuteRequest::from_fields(std::move(id), {x.argv().begin(), x.argv().end()},
-                                       std::move(cwd), std::move(env), wall);
+CommandIndex command_of(const std::string &text) {
+    auto index = CommandIndex::parse(text);
+    if (!index)
+        throw SessionError("INVALID_REQUEST", "invalid command ID");
+    return *index;
 }
-std::optional<WriteStdinRequest> decode_stdin(std::string_view packet) {
-    auto m = unpack<pb::SessionRequest>(packet);
-    if (m.operation_case() != pb::SessionRequest::kStdinWrite) return std::nullopt;
-    if (m.application_version() != 1 && m.application_version() != 2)
-        throw SessionError("UNSUPPORTED_VERSION", "supported protocol versions: 1, 2");
-    const auto &input = m.stdin_write();
-    if (input.data().size() > 4096)
-        throw SessionError("INVALID_REQUEST", "stdin chunk exceeds 4096 bytes");
-    return WriteStdinRequest{CommandId::parse(input.command_id()), input.data()};
+RequestKey key_of(const std::string &text) {
+    auto key = RequestKey::parse(text);
+    if (!key)
+        throw SessionError("INVALID_REQUEST", "invalid request_id");
+    return *key;
 }
-Json decode_request(std::string_view packet) {
-    auto m = unpack<pb::SessionRequest>(packet);
-    Json j = {{"protocol_version", m.application_version()}};
+// Every branch returns a fully validated business value: SessionRequest::create is
+// the only way to build one, so a half-checked request cannot escape this function.
+SessionOperation operation_of(const pb::SessionRequest &m) {
     switch (m.operation_case()) {
     case pb::SessionRequest::kExecute: {
-        const auto &x = m.execute(); j["op"] = "execute"; if (x.has_request_id()) j["request_id"] = x.request_id();
-        j["argv"] = std::vector<std::string>(x.argv().begin(), x.argv().end());
-        if (x.has_cwd()) j["cwd"] = x.cwd();
-        if (x.has_wall_ms()) j["wall_ms"] = x.wall_ms();
-        if (x.has_env()) { j["env"] = Json::object(); for (const auto &entry : x.env().values()) j["env"][entry.first] = entry.second; }
-        break;
+        const auto &x = m.execute();
+        if (m.application_version() == 2 && !x.has_request_id())
+            throw SessionError("INVALID_REQUEST", "protocol v2 execute requires request_id");
+        std::optional<RequestKey> key;
+        if (x.has_request_id())
+            key = key_of(x.request_id());
+        std::optional<std::filesystem::path> cwd;
+        if (x.has_cwd())
+            cwd = std::filesystem::path(x.cwd());
+        std::optional<std::map<std::string, std::string>> env;
+        if (x.has_env()) {
+            env.emplace();
+            for (const auto &entry : x.env().values())
+                env->emplace(entry.first, entry.second);
+        }
+        std::optional<std::chrono::milliseconds> timeout;
+        if (x.has_wall_ms()) {
+            // Guard the cast: wall_ms above int64 would be undefined, not slow.
+            if (x.wall_ms() >
+                static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                throw SessionError("INVALID_REQUEST", "wall_ms outside supported range");
+            timeout = std::chrono::milliseconds(static_cast<std::int64_t>(x.wall_ms()));
+        }
+        std::vector<std::string> argv(x.argv().begin(), x.argv().end());
+        return Execute{business([&] {
+            return ExecutionRequest::create(std::move(argv), std::move(cwd), std::move(env),
+                                            timeout, std::move(key));
+        })};
     }
-    case pb::SessionRequest::kStatus: j["op"] = "status"; break;
-    case pb::SessionRequest::kClose: j["op"] = "close"; break;
-    case pb::SessionRequest::kCancel:
-        j["op"] = "cancel"; if (m.cancel().has_command_id()) j["command_id"] = m.cancel().command_id(); break;
+    case pb::SessionRequest::kStatus:
+        return Status{};
+    case pb::SessionRequest::kClose:
+        return Close{};
+    case pb::SessionRequest::kCancel: {
+        const auto &x = m.cancel();
+        std::optional<CommandIndex> command;
+        if (x.has_command_id())
+            command = command_of(x.command_id());
+        return Cancel{command};
+    }
     case pb::SessionRequest::kStdinWrite: {
-        j["op"] = "stdin"; j["command_id"] = m.stdin_write().command_id();
-        const auto &data = m.stdin_write().data();
-        if (data.size() > 4096) throw SessionError("INVALID_REQUEST", "stdin chunk exceeds 4096 bytes");
-        j["bytes"] = std::vector<unsigned char>(data.begin(), data.end()); break;
+        const auto &x = m.stdin_write();
+        if (x.data().size() > max_stdin_chunk)
+            throw SessionError("INVALID_REQUEST", "stdin chunk exceeds 4096 bytes");
+        return StdinWrite{command_of(x.command_id()), x.data()};
     }
-    case pb::SessionRequest::kStdinClose: j["op"] = "stdin-close"; j["command_id"] = m.stdin_close().command_id(); break;
-    case pb::SessionRequest::kOutput:
-        j["op"] = "output"; j["command_id"] = m.output().command_id(); j["offset"] = m.output().offset();
-        if (m.output().stream() == pb::STDOUT) j["stream"] = "stdout";
-        else if (m.output().stream() == pb::STDERR) j["stream"] = "stderr";
-        else throw SessionError("INVALID_REQUEST", "invalid output stream");
-        break;
-    case pb::SessionRequest::kResult: j["op"] = "result"; j["command_id"] = m.result().command_id(); break;
-    case pb::SessionRequest::kRequestStatus: j["op"] = "request-status"; j["request_id"] = m.request_status().request_id(); break;
+    case pb::SessionRequest::kStdinClose:
+        return StdinClose{command_of(m.stdin_close().command_id())};
+    case pb::SessionRequest::kOutput: {
+        const auto &x = m.output();
+        Stream stream = Stream::standard_output;
+        if (x.stream() == pb::STDERR)
+            stream = Stream::standard_error;
+        else if (x.stream() != pb::STDOUT)
+            throw SessionError("INVALID_REQUEST", "invalid output stream");
+        return ReadOutput{command_of(x.command_id()), stream, x.offset()};
+    }
+    case pb::SessionRequest::kResult:
+        return ReadResult{command_of(m.result().command_id())};
+    case pb::SessionRequest::kRequestStatus:
+        return RequestStatusQuery{key_of(m.request_status().request_id())};
     case pb::SessionRequest::kWorkspace: {
-        j["op"] = "files"; const auto &w = m.workspace();
+        const auto &w = m.workspace();
         switch (w.operation_case()) {
-        case pb::WorkspaceRequest::kSnapshot: j["request"] = {{"op", "snapshot"}, {"source", w.snapshot().source()}, {"name", w.snapshot().name()}}; break;
-        case pb::WorkspaceRequest::kManifest: j["request"] = {{"op", "manifest"}}; break;
-        case pb::WorkspaceRequest::kExportFiles: j["request"] = {{"op", "export"}, {"destination", w.export_files().destination()}}; break;
-        default: throw SessionError("UNKNOWN_OPERATION", "missing workspace operation");
-        } break;
+        case pb::WorkspaceRequest::kSnapshot:
+            return Workspace{WorkspaceSnapshot{w.snapshot().source(), w.snapshot().name()}};
+        case pb::WorkspaceRequest::kManifest:
+            return Workspace{WorkspaceManifest{}};
+        case pb::WorkspaceRequest::kExportFiles:
+            return Workspace{WorkspaceExport{w.export_files().destination()}};
+        default:
+            throw SessionError("UNKNOWN_OPERATION", "missing workspace operation");
+        }
     }
-    default: throw SessionError("UNKNOWN_OPERATION", "missing or unsupported session operation");
+    default:
+        throw SessionError("UNKNOWN_OPERATION", "missing or unsupported session operation");
     }
+}
+} // namespace
+
+DecodedRequest decode_session_request(std::string_view packet) {
+    auto m = unpack<pb::SessionRequest>(packet);
+    if (m.application_version() != 1 && m.application_version() != 2)
+        throw SessionError("UNSUPPORTED_VERSION", "supported protocol versions: 1, 2");
+    return DecodedRequest{SessionRequest::create(operation_of(m)), m.application_version()};
+}
+
+std::string_view operation_name(const SessionOperation &operation) noexcept {
+    switch (operation.index()) {
+    case 0:
+        return "execute";
+    case 1:
+        return "status";
+    case 2:
+        return "close";
+    case 3:
+        return "cancel";
+    case 4:
+        return "stdin";
+    case 5:
+        return "stdin-close";
+    case 6:
+        return "output";
+    case 7:
+        return "result";
+    case 8:
+        return "request-status";
+    default:
+        return "files";
+    }
+}
+
+Json session_request_to_json(const SessionRequest &request, std::uint32_t application_version) {
+    Json j = {{"protocol_version", application_version}};
+    std::visit(
+        [&j](const auto &value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Execute>) {
+                const auto &r = value.request;
+                j["op"] = "execute";
+                j["argv"] = r.argv();
+                if (r.key())
+                    j["request_id"] = r.key()->str();
+                if (r.cwd())
+                    j["cwd"] = r.cwd()->string();
+                if (r.env()) {
+                    j["env"] = Json::object();
+                    for (const auto &[name, content] : *r.env())
+                        j["env"][name] = content;
+                }
+                if (r.timeout())
+                    j["wall_ms"] = r.timeout()->count();
+            } else if constexpr (std::is_same_v<T, Status>) {
+                j["op"] = "status";
+            } else if constexpr (std::is_same_v<T, Close>) {
+                j["op"] = "close";
+            } else if constexpr (std::is_same_v<T, Cancel>) {
+                j["op"] = "cancel";
+                if (value.command)
+                    j["command_id"] = value.command->str();
+            } else if constexpr (std::is_same_v<T, StdinWrite>) {
+                j["op"] = "stdin";
+                j["command_id"] = value.command.str();
+                j["bytes"] = std::vector<unsigned char>(value.bytes.begin(), value.bytes.end());
+            } else if constexpr (std::is_same_v<T, StdinClose>) {
+                j["op"] = "stdin-close";
+                j["command_id"] = value.command.str();
+            } else if constexpr (std::is_same_v<T, ReadOutput>) {
+                j["op"] = "output";
+                j["command_id"] = value.command.str();
+                j["stream"] = value.stream == Stream::standard_output ? "stdout" : "stderr";
+                j["offset"] = value.offset;
+            } else if constexpr (std::is_same_v<T, ReadResult>) {
+                j["op"] = "result";
+                j["command_id"] = value.command.str();
+            } else if constexpr (std::is_same_v<T, RequestStatusQuery>) {
+                j["op"] = "request-status";
+                j["request_id"] = value.key.str();
+            } else {
+                std::visit(
+                    [&j](const auto &inner) {
+                        using W = std::decay_t<decltype(inner)>;
+                        j["op"] = "files";
+                        if constexpr (std::is_same_v<W, WorkspaceSnapshot>) {
+                            j["request"] = {
+                                {"op", "snapshot"}, {"source", inner.source}, {"name", inner.name}};
+                        } else if constexpr (std::is_same_v<W, WorkspaceManifest>) {
+                            j["request"] = {{"op", "manifest"}};
+                        } else {
+                            j["request"] = {{"op", "export"}, {"destination", inner.destination}};
+                        }
+                    },
+                    value.operation);
+            }
+        },
+        request.operation());
     return j;
 }
+
+Json decode_request(std::string_view packet) {
+    const auto decoded = decode_session_request(packet);
+    return session_request_to_json(decoded.request, decoded.application_version);
+}
+
 std::string encode_request(const Json &request) {
     auto j = validate_session_request(request);
     pb::SessionRequest m; m.set_protocol_version(1); m.set_application_version(request.value("protocol_version", 1));
@@ -180,24 +317,24 @@ Json get_command(const pb::CommandRecord &p) {
     return j;
 }
 }
-std::string encode_response(const Json &request, const Json &answer) {
-    pb::SessionResponse m; m.set_protocol_version(1); auto op = request.at("op").get<std::string>();
-    if (op == "execute" || op == "result" || op == "request-status") put_command(answer,m.mutable_command());
-    else if (op == "status") {
+std::string encode_response(std::string_view operation, const Json &answer) {
+    pb::SessionResponse m; m.set_protocol_version(1);
+    if (operation == "execute" || operation == "result" || operation == "request-status") put_command(answer,m.mutable_command());
+    else if (operation == "status") {
         auto *x = m.mutable_status(); x->set_run_id(answer.at("run_id").get<std::string>());
         x->set_schema_version(answer.at("schema_version").get<unsigned>()); x->set_session_protocol_version(answer.at("protocol_version").get<unsigned>());
         x->set_session_state(answer.at("session_state").get<std::string>()); x->set_commands(answer.at("commands").get<std::uint64_t>());
         if (!answer.at("current").is_null()) put_command(answer.at("current"),x->mutable_current());
         if (!answer.at("last").is_null()) put_command(answer.at("last"),x->mutable_last());
         x->set_metrics_json(answer.at("metrics").dump());
-    } else if (op == "stdin") m.mutable_input()->set_accepted_bytes(answer.at("accepted_bytes").get<std::uint64_t>());
-    else if (op == "output") {
+    } else if (operation == "stdin") m.mutable_input()->set_accepted_bytes(answer.at("accepted_bytes").get<std::uint64_t>());
+    else if (operation == "output") {
         auto *x=m.mutable_output(); x->set_offset(answer.at("offset").get<std::uint64_t>()); x->set_next_offset(answer.at("next_offset").get<std::uint64_t>());
         auto bytes=answer.at("bytes").get<std::vector<unsigned char>>(); x->set_data(bytes.data(),bytes.size()); x->set_finished(answer.at("finished").get<bool>());
-    } else if (op == "close" || op == "cancel" || op == "stdin-close") {
+    } else if (operation == "close" || operation == "cancel" || operation == "stdin-close") {
         auto *x=m.mutable_acknowledgement(); if (answer.contains("status")) x->set_status(answer.at("status").get<std::string>());
         if (answer.contains("active")) x->set_active(answer.at("active").get<bool>()); if (answer.contains("closed")) x->set_closed(answer.at("closed").get<bool>());
-    } else if (op == "files") {
+    } else if (operation == "files") {
         auto *x=m.mutable_workspace(); x->set_bytes(answer.at("bytes").get<std::uint64_t>()); x->set_entry_count(answer.at("entry_count").get<std::uint64_t>());
         x->set_manifest_truncated(answer.at("manifest_truncated").get<bool>());
         if (answer.contains("complete")) x->set_complete(answer.at("complete").get<bool>());

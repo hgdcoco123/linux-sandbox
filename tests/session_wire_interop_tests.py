@@ -16,7 +16,11 @@ def run(operation, payload):
 
 class CrossLanguageTests(unittest.TestCase):
     def test_python_request_to_cpp(self):
-        request = {'op':'execute', 'request_id':'r1', 'argv':['/bin/true'], 'env':{}, 'cwd':'', 'wall_ms':0}
+        # Valid values on purpose: the C++ decoder now rejects what the business
+        # types reject (empty cwd, zero wall_ms), so a fixture with those would be
+        # testing that two front doors disagree.
+        request = {'op':'execute', 'request_id':'r1', 'argv':['/bin/true'], 'env':{},
+                   'cwd':'/tmp', 'wall_ms':1000}
         result = json.loads(run('decode-request', encode_request(request)))
         self.assertEqual(result, {'protocol_version':2, **request})
         data = bytes([0,255])*2048

@@ -1,4 +1,5 @@
 #include "sandbox/cgroup.hpp"
+#include "sandbox/core/ops_json.hpp"
 #include "sandbox/session_store.hpp"
 #include "sandbox/session_wire.hpp"
 #include "sandbox/store.hpp"
@@ -201,16 +202,15 @@ ControlServer::~ControlServer() {
 }
 bool ControlServer::accept_cancel() {
     bool result = false;
-    serve([&](const Json &j) -> Json {
-        bool ok = j.value("op", "") == "cancel";
+    serve([&](const SessionRequest &request) -> Json {
+        bool ok = request.as<Cancel>() != nullptr;
         result = result || ok;
         return {{"status", ok ? "accepted" : "rejected"}};
     });
     return result;
 }
-void ControlServer::serve(const std::function<Json(const Json &)> &handler,
-                          const std::function<Json(const ExecuteRequest &)> &execute_handler,
-                          const std::function<Json(const WriteStdinRequest &)> &stdin_handler) {
+void ControlServer::serve(const std::function<Json(const SessionRequest &)> &handler,
+                          const std::function<Json(const Json &)> &json_handler) {
     for (int budget = 0; budget < 8; ++budget) {
         UniqueFd peer(::accept4(fd_.get(), nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK));
         if (!peer) {
@@ -259,33 +259,37 @@ void ControlServer::serve(const std::function<Json(const Json &)> &handler,
                 (message.msg_flags & MSG_TRUNC) || unexpected_control)
                 throw std::runtime_error("invalid request size");
             bool legacy = n == 6 && std::string_view(request, 6) == "cancel";
-            if (binary && stdin_handler) {
-                auto input = session_wire::decode_stdin(std::string_view(request, static_cast<std::size_t>(n)));
-                if (input) {
-                    auto answer = stdin_handler(*input);
-                    response = session_wire::encode_response(Json{{"op", "stdin"}}, answer);
-                    ::send(it->fd.get(), response.data(), response.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
-                    it = pending_.erase(it);
-                    continue;
-                }
+            // One decode, into business types. The JSON front door below shares the
+            // same target, so a client cannot reach the controller with a value the
+            // protobuf path would have rejected.
+            std::optional<SessionRequest> decoded;
+            std::string operation;
+            if (binary) {
+                auto typed = session_wire::decode_session_request(
+                    std::string_view(request, static_cast<std::size_t>(n)));
+                decoded = std::move(typed.request);
+                operation = std::string(session_wire::operation_name(decoded->operation()));
+            } else if (!legacy && json_handler) {
+                auto answer = json_handler(Json::parse(request, request + n));
+                response =
+                    Json{{"protocol_version", 2}, {"ok", true}, {"data", answer}}.dump();
+                if (response.size() > 16384)
+                    response = R"({"ok":false,"error":"response too large"})";
+                ::send(it->fd.get(), response.data(), response.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+                it = pending_.erase(it);
+                continue;
+            } else {
+                auto parsed = legacy ? Json{{"op", "cancel"}} : Json::parse(request, request + n);
+                std::string error;
+                decoded = session_request_from_json(parsed, error);
+                if (!decoded)
+                    throw SessionError("INVALID_REQUEST", error);
+                operation = std::string(session_wire::operation_name(decoded->operation()));
             }
-            if (binary && execute_handler) {
-                auto typed = session_wire::decode_execute(std::string_view(request, static_cast<std::size_t>(n)));
-                if (typed) {
-                    auto answer = execute_handler(*typed);
-                    response = session_wire::encode_response(Json{{"op", "execute"}}, answer);
-                    ::send(it->fd.get(), response.data(), response.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
-                    it = pending_.erase(it);
-                    continue;
-                }
-            }
-            auto parsed = legacy ? Json{{"op", "cancel"}} : binary
-                ? session_wire::decode_request(std::string_view(request, static_cast<std::size_t>(n)))
-                : Json::parse(request, request + n);
-            auto answer = handler(parsed);
-            response = binary ? session_wire::encode_response(parsed, answer) : legacy
-                           ? answer.value("status", "rejected")
-                           : Json{{"protocol_version", 2}, {"ok", true}, {"data", answer}}.dump();
+            auto answer = handler(*decoded);
+            response = binary ? session_wire::encode_response(operation, answer)
+                       : legacy ? answer.value("status", "rejected")
+                                : Json{{"protocol_version", 2}, {"ok", true}, {"data", answer}}.dump();
         } catch (const SessionError &e) {
             response = binary ? session_wire::encode_error(e) : Json{
                 {"protocol_version", 2},

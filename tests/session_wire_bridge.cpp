@@ -19,7 +19,8 @@ int main(int argc, char **argv) {
         else if (op == "encode-request") std::cout << sandbox::session_wire::encode_request(sandbox::Json::parse(input));
         else if (op == "encode-response") {
             auto value = sandbox::Json::parse(input);
-            std::cout << sandbox::session_wire::encode_response(value.at("request"), value.at("answer"));
+            std::cout << sandbox::session_wire::encode_response(
+                value.at("request").at("op").get<std::string>(), value.at("answer"));
         } else return 2;
     } catch (const std::exception &e) { std::cerr << e.what(); return 1; }
 }

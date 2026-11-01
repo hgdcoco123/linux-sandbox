@@ -1,11 +1,10 @@
 #pragma once
+#include "sandbox/core/ops.hpp"
 #include "sandbox/linux.hpp"
 #include "sandbox/report.hpp"
 #include <functional>
 #include <memory>
 namespace sandbox {
-class ExecuteRequest;
-struct WriteStdinRequest;
 class RunStore {
   public:
     static std::unique_ptr<RunStore> create(const fs::path &root, const RunConfig &);
@@ -41,9 +40,12 @@ class ControlServer {
         return fd_.get();
     }
     bool accept_cancel();
-    void serve(const std::function<Json(const Json &)> &handler,
-               const std::function<Json(const ExecuteRequest &)> &execute_handler = {},
-               const std::function<Json(const WriteStdinRequest &)> &stdin_handler = {});
+    // Binary session traffic is decoded once into a typed request, so the handler
+    // never sees JSON. JSON traffic is still accepted from clients that speak it:
+    // it is decoded through the same typed front door, unless a protocol of its own
+    // supplies `json_handler` (the batch control channel does).
+    void serve(const std::function<Json(const SessionRequest &)> &handler,
+               const std::function<Json(const Json &)> &json_handler = {});
     static Json request(const fs::path &, const std::string &, const Json &);
     static Json cancel(const fs::path &root, const std::string &id);
 

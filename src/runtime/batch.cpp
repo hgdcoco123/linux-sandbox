@@ -209,7 +209,7 @@ Json run_batch(BatchSpec spec, const fs::path &state, const fs::path &binary,
                 cancel(i);
             changed = true;
         }
-        control.serve([&](const Json &j) -> Json {
+        control.serve({}, [&](const Json &j) -> Json {
             auto version = j.value("protocol_version", 1);
             if (version != 1 && version != 2)
                 throw SessionError("UNSUPPORTED_VERSION", "unsupported batch control version");

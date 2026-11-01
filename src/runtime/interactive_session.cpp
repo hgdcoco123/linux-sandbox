@@ -327,14 +327,6 @@ class SessionController {
             },
             request.operation());
     }
-    // Wire entry point: decode once, then the typed overload takes over.
-    Json handle(const Json &wire) {
-        std::string error;
-        auto decoded = session_request_from_json(wire, error);
-        if (!decoded)
-            throw SessionError("INVALID_REQUEST", error);
-        return handle(*decoded);
-    }
     void event(ControlEnvelope envelope, bool parent) {
         if (parent) {
             if (auto *created = std::get_if<InitCreated>(&envelope.message)) {
@@ -532,9 +524,9 @@ class SessionController {
                     throw std::runtime_error("session process exited without complete facts");
                 if (lifecycle_.stopping() && now - closed_ > config_.limits.grace_ms + 5000)
                     throw std::runtime_error("session close deadline exceeded");
-                server_->serve([&](const Json &j) {
+                server_->serve([&](const SessionRequest &request) -> Json {
                     try {
-                        return handle(j);
+                        return handle(request);
                     } catch (const StorageError &e) {
                         errors_.push_back(e.what());
                         try {
@@ -543,15 +535,7 @@ class SessionController {
                         }
                         throw;
                     }
-                }, [&](const ExecuteRequest &request) {
-                    try {
-                        return start(request);
-                    } catch (const StorageError &e) {
-                        errors_.push_back(e.what());
-                        try { close("storage_failure"); } catch (...) {}
-                        throw;
-                    }
-                }, [&](const WriteStdinRequest &input) { return write_stdin(input); });
+                });
                 loop.wait({{signals.fd(), 1},
                            {ticks.fd(), 2},
                            {server_->fd(), 3},
