@@ -397,8 +397,17 @@ void RunSession::supervise(SignalSource &signals) {
                         std::string(parent ? "launcher channel: " : "init channel: ") + e.what());
                     apply(core_->supervisor_failed("launcher channel closed", now_ms()));
                 }
-                if (!parent && !init_done_ && core_->phase() != Phase::stopping)
-                    apply(core_->supervisor_failed("init channel closed", now_ms()));
+                // A closed init channel is the end of evidence, not a licence to
+                // wait: whatever was queued either arrived or is gone with the
+                // peer. During a stop that means the run may settle on the facts
+                // it already has; before a stop it means the run cannot be
+                // confirmed and is reported as such.
+                if (!parent && !init_done_) {
+                    const auto phase = core_->phase();
+                    init_done_ = true;
+                    if (phase != Phase::stopping && phase != Phase::draining)
+                        apply(core_->supervisor_failed("init channel closed", now_ms()));
+                }
                 break;
             }
             if (!message)
@@ -479,6 +488,15 @@ void RunSession::supervise(SignalSource &signals) {
             apply(core_->descendants_empty(now));
         }
         sample_metrics(); // Cancel/deadline decisions above are independent of sampling cadence.
+        if (const char *trace = std::getenv("SBX_SUPERVISE_TRACE");
+            trace && *trace && (now - trace_at_).count() > 500) {
+            trace_at_ = now;
+            logger_->warn("trace phase={} init_done={} init_reaped={} launcher_reaped={} "
+                          "init_ch={} launcher_ch={} core_finished={}",
+                          static_cast<int>(core_->phase()), init_done_, init_reaped_,
+                          report_.launcher_reaped, init_channel_open_, launcher_channel_open_,
+                          core_->finished());
+        }
         apply(core_->tick(now));
         // A stop that never settles must still end. Spinning here is the worst
         // outcome: the caller waits forever instead of learning that the stop was
