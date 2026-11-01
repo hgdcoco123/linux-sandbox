@@ -7,6 +7,7 @@
 #include "sandbox/session_safety.hpp"
 #include "sandbox/session_state.hpp"
 #include "sandbox/session_store.hpp"
+#include "sandbox/snapshot.hpp"
 #include "sandbox/workspace_service.hpp"
 #include <fcntl.h>
 #include <iostream>
@@ -117,6 +118,8 @@ class SessionController {
     std::unique_ptr<CommandExecution> execution_;
     std::unique_ptr<SessionStore> records_;
     std::unique_ptr<WorkspaceService> workspace_;
+    // Snapshot copies this session made of /input; removed with the workspace.
+    std::vector<fs::path> input_snapshots_;
     SessionLifecycle lifecycle_;
     Json last_ = nullptr;
     Json current() const {
@@ -445,6 +448,9 @@ class SessionController {
             checked(::mkdir(workspace.c_str(), 0700), "create workspace");
             if (config_.mode == "isolated")
                 config_.mounts.push_back({workspace, "/output", false});
+            // Snapshot /input before the launcher exists and before the effective
+            // config is published, so config.json describes what actually ran.
+            input_snapshots_ = snapshot_inputs(config_, store_->directory());
             store_->write_json("config.json", config_.to_json());
             store_->state(RunState::preparing);
             server_ = std::make_unique<ControlServer>(store_->directory() / "control.sock");
@@ -613,10 +619,21 @@ class SessionController {
         // hidden: silently keeping a workspace the caller asked to drop is the
         // same class of mistake as silently deleting one they wanted.
         if (!config_.workspace.keep_on_close) {
+            // Appended to whatever cleanup already failed: assigning here would
+            // silently replace earlier failures.
+            auto failures = result.value("cleanup_errors", Json::array());
+            for (const auto &directory : input_snapshots_) {
+                std::error_code failure;
+                fs::remove_all(directory, failure);
+                if (failure)
+                    failures.push_back("input snapshot: " + failure.message());
+            }
             std::error_code failure;
             fs::remove_all(store_->directory() / "workspace", failure);
             if (failure)
-                result["cleanup_errors"] = Json::array({failure.message()});
+                failures.push_back(failure.message());
+            if (!failures.empty())
+                result["cleanup_errors"] = failures;
         }
         records_->close(result);
         execution_.reset();

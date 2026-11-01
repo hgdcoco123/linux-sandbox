@@ -90,8 +90,8 @@ exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
 ## 6. 已知未覆盖
 
 - 崩溃/掉电恢复、磁盘故障、长期泄漏、并发竞争
-- `keep_on_close` 与 `/input` 的 `snapshot_copy` **尚未实现**
-- 会话路径的业务层仍是 JSON（`interactive_session::handle`）
+- `/input` 的 `snapshot_copy` 只在 isolated 模式下存在；本机没有 cgroup 委派，**这条路径尚未在有真实挂载的机器上验证过**（`sessions.py` 的 isolated 分支已加断言）
+- `session_wire` 仍是 Protobuf → JSON → 业务层 → JSON → Protobuf
 - 两份 pid-1 实现只剩环境准备共享，命令循环仍各写一份
 
 ## 7. 报告模板

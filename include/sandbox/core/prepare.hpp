@@ -20,6 +20,10 @@ enum class PrepareStep {
     control_socket,
     cgroup,
     output_capture,
+    // Before the launcher, because the launcher is handed the mount sources: a
+    // snapshot has to be on disk by then, and a bind would let the host keep
+    // writing into a running sandbox.
+    input_snapshot,
     launcher,
     namespaces,
     id_map,

@@ -2,6 +2,7 @@
 #include "sandbox/core/supervisor.hpp"
 #include "sandbox/event_loop.hpp"
 #include "sandbox/session.hpp"
+#include "sandbox/snapshot.hpp"
 #include <fcntl.h>
 #include <iostream>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -204,6 +205,20 @@ void RunSession::prepare() {
                          stderr_.reset();
                          pipe_out_.reset();
                          pipe_err_.reset();
+                     }});
+    // The input snapshot precedes the launcher: the launcher is handed the mount
+    // source, so a bind would let the host change what the target reads.
+    steps.push_back({PrepareStep::input_snapshot,
+                     [this] { input_snapshots_ = snapshot_inputs(config_, store_->directory()); },
+                     [this] {
+                         for (const auto &directory : input_snapshots_) {
+                             std::error_code failure;
+                             fs::remove_all(directory, failure);
+                             if (failure)
+                                 report_.cleanup_errors.push_back(
+                                     "input snapshot: " + failure.message());
+                         }
+                         input_snapshots_.clear();
                      }});
     steps.push_back({PrepareStep::launcher,
                      [this, root] {

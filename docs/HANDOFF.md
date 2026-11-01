@@ -78,7 +78,7 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 5 | 隔离准备步骤化 + 逆序回滚 | **完成**。`PrepareSequence` |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
-| 8 | workspace 与 runtime 边界 | **部分**。`keep_on_close` 已实现、容量与条目限制生效；**`/input` 仍是只读绑定，不是快照** |
+| 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、容量/条目限制、`/input` 的 `snapshot_copy` 均已生效（默认仍是 `bind_readonly`，不再有兜底切换） |
 | 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
 | 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留等 |
 
@@ -102,14 +102,14 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - SDK 的 `wait()` / `result()` 直读 `result.json`，所以 `sdk/session_client.py` 里有一个 `_record_reply()`，把记录映射成回包形状；旧形状原样返回。
 - 恢复语义：只有「接受记录」存在才算跑过；缺结果时写一条 `Indeterminate` 记录（回包里显示 `interrupted`），不会重跑。
 
-### 4.2 `/input` 快照复制（下一步）
+### 4.2 `/input` 快照复制（**已完成**）
 
-- 现状：输入目录以只读 bind 挂进沙箱，宿主后续修改会改变沙箱内的可见内容
-- 设计要求：输入是**复制后的快照**
-- 目标：把复制做成 `PrepareSequence` 的一个步骤，失败按逆序回滚；复制时沿用 `artifacts.cpp` 的目录 FD 语义（拒绝符号链接、特殊文件、路径替换）
-- 相关：`core/workspace.hpp` 的 `WorkspacePolicy` 已有容量/条目/深度限制
+- `workspace.input = "snapshot_copy"` 时，`snapshot_inputs()`（`src/storage/artifacts.cpp`）在 launcher 启动前把每个 `/input` 挂载点的宿主目录复制到 `<run>/input`，并把 `RunConfig.mounts[].source` 改指向副本。之后下游（launcher、init、mount）只看到副本。
+- 复制**复用** `file_request` 的 snapshot 路径，因此继承同一套语义：祖先目录不跟随符号链接、拒绝符号链接/硬链接/特殊文件、边读边校验文件未被修改、staging 目录 + `renameat2(NOREPLACE)` 原子发布。失败时保留 staging 目录用于诊断，不降级成绑定。
+- 单次执行里它是 `PrepareStep::input_snapshot`（插在 `output_capture` 与 `launcher` 之间，因为 launcher 拿的就是挂载源），撤销时删除副本；会话路径在 `RunStore` 之后、`LauncherClient` 之前调用，关闭时随 workspace 一起删除，删除失败追加进 `cleanup_errors`。
+- 验证边界要说清楚：process 模式本来就不允许 mounts，所以 `/input` 只有 isolated 模式才存在；本机没有 cgroup 委派，`isolation_integration` 一直是跳过。因此这条路径的端到端验证在 `sessions.py` 的 isolated 分支里（需 `SANDBOX_TEST_RUNTIME`/`SANDBOX_TEST_CGROUP`），断言方式是「会话起来后改宿主文件，副本仍是原内容」。**这台虚拟机上没有跑过有真实挂载的用例。**
 
-### 4.2 `session_wire` 类型化（下一步）
+### 4.3 `session_wire` 类型化（下一步）
 
 - 目标文件：`src/runtime/session_wire.cpp`
 - 现状：Protobuf → JSON → 业务层 → JSON → Protobuf，两层转换
@@ -117,7 +117,7 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - 会牵动：`sdk/` 下的 Python 客户端与 `tests/session_wire_*`、`tests/session_wire_interop`
 - 建议保留 `RawReply` 之类的过渡类型给 `status`/`files`，先切执行路径再切其余
 
-### 4.3 会话控制器接入执行核心（最后，影响面最大）
+### 4.4 会话控制器接入执行核心（最后，影响面最大）
 
 - 目标文件：`src/runtime/interactive_session.cpp`（约 560 行），重写 `event()` 与监督循环
 - 现状：会话每条命令自己维护一套 `CommandExecution` + 监督循环，与 `RunSession` 是两份实现

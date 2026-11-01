@@ -45,6 +45,9 @@ class RunSession {
     std::unique_ptr<MetricsSampler> sampler_;
     std::unique_ptr<LauncherClient> launcher_;
     std::unique_ptr<OutputCapture> stdout_, stderr_;
+    // Snapshot copies of /input made by the input_snapshot step, so a failed
+    // preparation can take them back.
+    std::vector<fs::path> input_snapshots_;
     // Target-side write ends, held only between pipe creation and launcher spawn.
     UniqueFd pipe_out_, pipe_err_;
     std::uint64_t started_ = 0;

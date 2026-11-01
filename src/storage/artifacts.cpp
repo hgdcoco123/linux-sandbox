@@ -2,6 +2,7 @@
 #include "sandbox/interactive.hpp"
 #include "sandbox/linux.hpp"
 #include "sandbox/sha256.hpp"
+#include "sandbox/snapshot.hpp"
 #include <algorithm>
 #include <array>
 #include <dirent.h>
@@ -172,5 +173,31 @@ Json file_request(const Json &j, const WorkspacePolicy &policy) {
             {"entries", manifest},
             {"bytes", budget.bytes},
             {"complete", true}};
+}
+
+std::vector<fs::path> snapshot_inputs(RunConfig &config, const fs::path &directory) {
+    std::vector<fs::path> created;
+    if (config.workspace.input != InputMode::snapshot_copy)
+        return created;
+    for (auto &mount : config.mounts) {
+        if (mount.target != "/input")
+            continue;
+        auto destination = directory / "input";
+        // Only one /input mount is meaningful; two would silently shadow each other.
+        if (!created.empty())
+            throw std::runtime_error("only one /input mount can be snapshotted");
+        // Reusing the copier inherits its guarantees: ancestors opened without
+        // following symlinks, symlinks/hardlinks/special files refused, files
+        // re-checked while being read, destination published atomically.
+        file_request({{"op", "snapshot"},
+                      {"source", mount.source.string()},
+                      {"destination", destination.string()}},
+                     config.workspace);
+        created.push_back(destination);
+        // From here on the sandbox mounts the copy; the host directory is no
+        // longer referenced by anything downstream.
+        mount.source = destination;
+    }
+    return created;
 }
 } // namespace sandbox

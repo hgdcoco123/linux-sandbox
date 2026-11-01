@@ -72,11 +72,14 @@ seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-s
 
 仍待做：
 
-- `src/storage/artifacts.cpp` 的复制循环改用 `admit()`，替换写死的 4096 项 / 256MiB
-- 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败进 `CleanupResult`
-- `/input` 的 `snapshot_copy` 模式尚未实现（当前仍是只读绑定）
-- `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化。
-- 会话路径的 `sessions.py` 等集成测试未更新，当前仓库状态下这些用例不可用。
+- `src/storage/artifacts.cpp` 的复制循环改用 `admit()`（现在用的是等价的就地判断，但决策函数仍是未接线的另一份）
+- `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化
+- `sessions.py` 的 isolated 分支已更新（含 `/input` 快照断言），但本机无 cgroup 委派、跑不到
+
+已完成：
+
+- 关闭时按 `keep_on_close` 决定保留还是删除 workspace，删除失败追加进 `cleanup_errors`
+- `/input` 的 `snapshot_copy`：复制在 launcher 前完成，见 `snapshot_inputs()`
 
 '## 本机可复现的验证
 

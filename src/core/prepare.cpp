@@ -16,6 +16,8 @@ const char *prepare_step_name(PrepareStep step) noexcept {
         return "cgroup";
     case PrepareStep::output_capture:
         return "output_capture";
+    case PrepareStep::input_snapshot:
+        return "input_snapshot";
     case PrepareStep::launcher:
         return "launcher";
     case PrepareStep::namespaces:
@@ -46,6 +48,8 @@ CleanupStage prepare_step_stage(PrepareStep step) noexcept {
         return CleanupStage::cgroup;
     case PrepareStep::output_capture:
         return CleanupStage::outputs;
+    case PrepareStep::input_snapshot:
+        return CleanupStage::workspace;
     case PrepareStep::launcher:
         return CleanupStage::launcher;
     case PrepareStep::namespaces:

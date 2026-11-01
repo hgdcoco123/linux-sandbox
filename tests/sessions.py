@@ -163,5 +163,25 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
             session.export(exported)
             assert (exported/"input"/"hello").read_text() == "world"
         print("isolated session smoke passed")
+
+        # /input as a snapshot: the copy is taken when the session starts, so a
+        # host edit afterwards must not be visible inside the sandbox. The
+        # assertion reads the durable copy from the host side, which is exactly
+        # the guarantee, and does not depend on any fixture mode.
+        source = root/"snapshot-source"
+        source.mkdir()
+        (source/"value").write_text("original")
+        snapshot_config = root/"isolated-snapshot.json"
+        snapshot_config.write_text(json.dumps({
+            "schema_version": 1, "argv": ["/usr/bin/sandbox-fixture", "echo"],
+            "runtime_root": runtime, "cgroup_root": cgroup,
+            "workspace": {"input": "snapshot_copy"},
+            "mounts": [{"source": str(source), "target": "/input", "readonly": True}],
+            "session": {"total_ms": 15000, "idle_ms": 8000}}))
+        with client.create(snapshot_config) as session:
+            (source/"value").write_text("changed")
+            copied = (session.directory/"input"/"value").read_text()
+            assert copied == "original", copied
+        print("isolated /input snapshot passed")
     else:
         print("isolated session smoke NOT EXECUTED: supply SANDBOX_TEST_RUNTIME/SANDBOX_TEST_CGROUP")
