@@ -59,6 +59,7 @@ required=(
     "process sessions and artifact regression passed"
     "isolated session smoke passed"
     "isolated /input snapshot passed"
+    "workspace quota, export and failure reporting passed"
     "isolated batch smoke passed"
 )
 incomplete=0

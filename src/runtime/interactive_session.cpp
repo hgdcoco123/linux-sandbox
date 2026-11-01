@@ -75,6 +75,16 @@ class SessionController {
     // session could not start.
     std::vector<CleanupFailure> prepare_rollback_failures_;
     bool preparation_failed_ = false;
+    // Quota workspace: the tree lives in a tmpfs inside the sandbox, the host keeps
+    // a published copy, and data crosses through `transfer_`.
+    bool quota_workspace_ = false;
+    fs::path transfer_;
+    std::uint64_t export_sequence_ = 0;
+    bool export_attempted_ = false, export_ok_ = false;
+    bool export_pending_ = false;
+    std::uint64_t export_bytes_ = 0;
+    std::uint32_t export_entries_ = 0;
+    std::string export_error_;
     SessionLifecycle lifecycle_;
     Json last_ = nullptr;
     // The live summary of the command in flight. Once it is finished the durable
@@ -144,6 +154,81 @@ class SessionController {
     // A report about the command running right now is answered from the live
     // summary: storage only knows what was written, and a replay must not claim
     // "uncertain" about a command the caller can still talk to.
+    // A dead sandbox must be reported, not blocked on: every transfer waits with a
+    // deadline and turns a closed channel into an explicit failure.
+    Transferred await_transfer() {
+        const auto deadline = monotonic_ms() + 30000;
+        for (;;) {
+            std::optional<ControlEnvelope> frame;
+            try {
+                frame = launcher_->init_channel().receive(true);
+            } catch (const ChannelClosed &) {
+                init_open_ = false;
+                throw SessionError("TRANSFER_FAILED", "the sandbox exited during the transfer");
+            }
+            if (frame) {
+                if (auto *answer = std::get_if<Transferred>(&frame->message))
+                    return *answer;
+                throw SessionError("TRANSFER_FAILED", "unexpected message from the sandbox");
+            }
+            if (!init_open_)
+                throw SessionError("TRANSFER_FAILED", "the sandbox exited during the transfer");
+            if (monotonic_ms() >= deadline)
+                throw SessionError("TRANSFER_FAILED", "the sandbox did not answer the transfer");
+            pollfd wait{launcher_->init_channel().fd(), POLLIN, 0};
+            ::poll(&wait, 1, 20);
+        }
+    }
+    // Ask the sandbox for its workspace and publish what it hands over. Only legal
+    // with no command running: the core's completion is what proves the target and
+    // its descendants are gone.
+    void sync_workspace() {
+        if (!quota_workspace_ || !launcher_)
+            return;
+        if (!current().is_null())
+            throw SessionError("SESSION_BUSY",
+                               "the workspace cannot be read while a command runs");
+        const auto tag = "out-" + std::to_string(++export_sequence_);
+        export_attempted_ = true;
+        std::error_code failure;
+        fs::remove_all(transfer_ / tag, failure);
+        launcher_->init_channel().send(ExportTree{tag});
+        auto answer = await_transfer();
+        if (!answer.ok) {
+            export_error_ = answer.error;
+            throw SessionError("EXPORT_FAILED", answer.error);
+        }
+        export_bytes_ = answer.bytes;
+        export_entries_ = answer.entries;
+        // Publish only once the whole tree arrived: a partial export never replaces
+        // the last good copy.
+        auto published = store_->directory() / "workspace";
+        fs::remove_all(published, failure);
+        if (failure) {
+            export_error_ = "publish: " + failure.message();
+            throw SessionError("EXPORT_FAILED", export_error_);
+        }
+        fs::rename(transfer_ / tag, published, failure);
+        if (failure) {
+            export_error_ = "publish: " + failure.message();
+            throw SessionError("EXPORT_FAILED", export_error_);
+        }
+        export_ok_ = true;
+    }
+    // Hand one staged upload to the sandbox, then publish the same tree as the host
+    // copy of it.
+    void import_workspace(const std::string &name) {
+        if (!quota_workspace_ || !launcher_)
+            throw SessionError("TRANSFER_FAILED", "workspace transfer is not configured");
+        launcher_->init_channel().send(ImportTree{name});
+        auto answer = await_transfer();
+        if (!answer.ok)
+            throw SessionError("IMPORT_FAILED", answer.error);
+        std::error_code failure;
+        fs::rename(transfer_ / "in" / name, store_->directory() / "workspace" / name, failure);
+        if (failure)
+            throw SessionError("IMPORT_FAILED", "publish upload: " + failure.message());
+    }
     Json command_reply(const CommandReport &report) const {
         const auto live = current();
         if (!report.finished && live.is_object() &&
@@ -220,6 +305,25 @@ class SessionController {
         reason_ = reason;
         if (execution_)
             execution_->input.write.reset();
+        // The workspace is handed over while init is still alive: a tmpfs dies with
+        // the namespace, and STOP may end it immediately. If a command is still
+        // running the tree cannot be read, which is reported rather than silently
+        // dropping the artifacts.
+        if (quota_workspace_) {
+            if (current().is_null()) {
+                try {
+                    sync_workspace();
+                } catch (const std::exception &e) {
+                    export_error_ = e.what();
+                    if (config_.workspace.keep_on_close)
+                        errors_.push_back(std::string("workspace export: ") + e.what());
+                }
+            } else {
+                // A command is still running: the tree cannot be read yet. Hand it
+                // over as soon as init reports it finished, before init exits.
+                export_pending_ = true;
+            }
+        }
         if (launcher_ && init_open_)
             launcher_->init_channel().send(Stop{});
         persist();
@@ -499,9 +603,7 @@ class SessionController {
         store_ = RunStore::create(root_, config_);
         store_->owner_update({{"persistent", true}});
         records_ = std::make_unique<SessionStore>(*store_);
-        workspace_ =
-            std::make_unique<WorkspaceService>(store_->directory() / "workspace", *records_,
-                                               config_.workspace);
+
         try {
             // Preparation is journaled exactly like a single run: a step that already
             // succeeded is undone in reverse when a later one fails, the reason the
@@ -515,8 +617,29 @@ class SessionController {
                                  checked(::mkdir(rootfs_.c_str(), 0700), "create session rootfs");
                                  auto workspace = store_->directory() / "workspace";
                                  checked(::mkdir(workspace.c_str(), 0700), "create workspace");
-                                 if (config_.mode == "isolated")
-                                     config_.mounts.push_back({workspace, "/output", false});
+                                 if (config_.mode == "isolated") {
+                                     // Quota workspace: the target writes to a tmpfs the
+                                     // supervisor cannot see, so the run directory keeps the
+                                     // transfer mount and the published copy instead of
+                                     // binding the workspace itself.
+                                     transfer_ = store_->directory() / "transfer";
+                                     checked(::mkdir(transfer_.c_str(), 0700),
+                                             "create transfer directory");
+                                     checked(::mkdir((transfer_ / "in").c_str(), 0700),
+                                             "create transfer inbox");
+                                     config_.workspace_transfer = transfer_;
+                                     quota_workspace_ = true;
+                                 }
+                                 WorkspaceTransfer hooks;
+                                 if (quota_workspace_) {
+                                     hooks.staging = transfer_ / "in";
+                                     hooks.publish = [this] { sync_workspace(); };
+                                     hooks.commit = [this](const std::string &name) {
+                                         import_workspace(name);
+                                     };
+                                 }
+                                 workspace_ = std::make_unique<WorkspaceService>(
+                                     workspace, *records_, config_.workspace, std::move(hooks));
                              },
                              [this] {
                                  std::error_code failure;
@@ -526,6 +649,14 @@ class SessionController {
                                  fs::remove_all(store_->directory() / "workspace", failure);
                                  if (failure)
                                      throw std::runtime_error("workspace: " + failure.message());
+                                 if (!transfer_.empty()) {
+                                     fs::remove_all(transfer_, failure);
+                                     if (failure)
+                                         throw std::runtime_error("transfer: " + failure.message());
+                                     transfer_.clear();
+                                     quota_workspace_ = false;
+                                     config_.workspace_transfer.clear();
+                                 }
                              }});
             steps.push_back({PrepareStep::control_socket,
                              [this] {
@@ -613,6 +744,18 @@ class SessionController {
                                                          std::chrono::system_clock::now()});
                         last_ = session_wire::command_report_to_json(*records_->result(execution_->accepted->index));
                         execution_.reset();
+                        // The command is finished and its descendants are gone, which
+                        // is exactly the moment a deferred handover may run.
+                        if (export_pending_ && quota_workspace_ && init_open_) {
+                            export_pending_ = false;
+                            try {
+                                sync_workspace();
+                            } catch (const std::exception &e) {
+                                export_error_ = e.what();
+                                if (config_.workspace.keep_on_close)
+                                    errors_.push_back(std::string("workspace export: ") + e.what());
+                            }
+                        }
                         if (!lifecycle_.stopping())
                             lifecycle_.transition(SessionState::idle);
                         idle_ = monotonic_ms();
@@ -736,6 +879,20 @@ class SessionController {
         if (recovery.last)
             result["last"] = session_wire::command_report_to_json(*recovery.last);
         result["session_state"] = "closed";
+        // The workspace is reported as three separate facts: what bounds it, whether
+        // the host copy on disk is current, and what the last export did. A target
+        // that exited 0 does not make the artifacts delivered.
+        result["workspace"] = {
+            {"mode", quota_workspace_ ? "tmpfs" : "host_directory"},
+            {"quota",
+             {{"max_bytes", config_.workspace.max_bytes},
+              {"max_entries", config_.workspace.max_entries}}},
+            {"export",
+             {{"attempted", export_attempted_},
+              {"ok", export_ok_},
+              {"bytes", export_bytes_},
+              {"entries", export_entries_},
+              {"error", export_error_}}}};
         result["stop_reason"] = reason_;
         result["errors"] = errors_;
         if (!prepare_rollback_failures_.empty()) {
@@ -746,6 +903,7 @@ class SessionController {
             result["cleanup_errors"] = failures;
         }
         result["metrics"] = metrics_report();
+
         // Retention is policy, and a failed removal is reported rather than
         // hidden: silently keeping a workspace the caller asked to drop is the
         // same class of mistake as silently deleting one they wanted.

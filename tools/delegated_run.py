@@ -61,7 +61,7 @@ runs.mkdir()
 binary = str(a.sandbox.resolve())
 if a.test_runtime:
     env = dict(os.environ, SANDBOX_TEST_RUNTIME=str(a.test_runtime.resolve()), SANDBOX_TEST_CGROUP=str(runs))
-    for test in ("isolation.py", "sessions.py", "batch_integration.py"):
+    for test in ("isolation.py", "sessions.py", "workspace_quota.py", "batch_integration.py"):
         code = subprocess.call([sys.executable, str(Path(__file__).resolve().parents[1] / "tests" / test), binary], env=env)
         if code:
             raise SystemExit(code)

@@ -134,6 +134,46 @@ int main(int argc, char **argv) {
         }
         return 0;
     }
+    // Quota probes: the workspace is a tmpfs, so going over its byte or inode budget
+    // fails the write with ENOSPC. Return 60 so the caller can tell "the quota
+    // stopped me" from any other failure.
+    if (!std::strcmp(mode, "fill-bytes")) {
+        long long wanted = argc > 2 ? std::atoll(argv[2]) : 0;
+        int fd = ::open("/output/fill", O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd < 0)
+            return 61;
+        char block[65536];
+        std::memset(block, 'x', sizeof(block));
+        long long written = 0;
+        while (written < wanted) {
+            auto chunk = wanted - written < static_cast<long long>(sizeof(block))
+                             ? static_cast<std::size_t>(wanted - written)
+                             : sizeof(block);
+            auto n = ::write(fd, block, chunk);
+            if (n <= 0) {
+                int saved = errno;
+                ::close(fd);
+                return (saved == ENOSPC || saved == EDQUOT) ? 60 : 62;
+            }
+            written += n;
+        }
+        ::close(fd);
+        return 0;
+    }
+    if (!std::strcmp(mode, "fill-files")) {
+        int wanted = argc > 2 ? std::atoi(argv[2]) : 0;
+        for (int i = 0; i < wanted; ++i) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/output/file-%d", i);
+            int fd = ::open(name, O_WRONLY | O_CREAT | O_EXCL, 0600);
+            if (fd < 0) {
+                int saved = errno;
+                return (saved == ENOSPC || saved == EDQUOT) ? 60 : 63;
+            }
+            ::close(fd);
+        }
+        return 0;
+    }
     if (!std::strcmp(mode, "memory")) {
         for (;;) {
             auto *p = static_cast<volatile char *>(std::malloc(1024 * 1024));
