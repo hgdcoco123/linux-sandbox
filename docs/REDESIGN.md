@@ -166,7 +166,7 @@ launcher 步骤的撤销是 `LauncherClient::abort()`。
 | P2 | 类型化会话请求/响应 + 二进制控制报文（`core/ops.hpp`、`core/wire.hpp`） | `[完成]` 模型与编解码；控制器接线在 P3 |
 | P3 | 统一执行核心 `core/supervisor`（事件→动作，纯逻辑） | `[完成]` 核心与测试；两个控制器的接线在 P3.5 |
 | P3.5 | `RunSession` 接入执行核心（单次执行） | `[完成]` |
-| P3.6 | `SessionController` 接入执行核心（连续会话） | `[待做]` 见 REMAINING.md |
+| P3.6 | `SessionController` 接入执行核心（连续会话） | `[进行中]` 请求/存储已类型化；控制器循环与 `session_wire` 仍是旧实现，见 REMAINING.md |
 | P4 | 准备步骤 journal + 逆序回滚（`core/prepare`） | `[完成]` |
 | P4.5 | `RunSession` 用准备序列执行并在失败时逆序回滚 | `[完成]` |
 | P5 | 合并两个 init | `[进行中]` 环境准备已共享（`init_common`）；命令循环仍分两份 |

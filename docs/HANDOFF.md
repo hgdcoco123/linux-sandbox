@@ -79,29 +79,37 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
 | 8 | workspace 与 runtime 边界 | **部分**。`keep_on_close` 已实现、容量与条目限制生效；**`/input` 仍是只读绑定，不是快照** |
-| 9 | 持久化记录独立建模 | **部分**。`core/record.hpp` + `record_json` 已有；**`SessionStore` 未迁移** |
+| 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
 | 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留等 |
 
 ## 4. 剩余工作（按建议顺序）
 
 每项都遵循同一条纪律：**改完 → 虚拟机跑全套 → 绿了才提交**。中途不提交、不改 D 盘。
 
-### 4.1 `SessionStore` 迁移到类型化记录（先做，最独立）
+### 4.1 `SessionStore` 迁移到类型化记录（**已完成**，不要再做一遍）
 
-- 目标文件：`src/storage/session_store.cpp`、`include/sandbox/session_store.hpp`
-- 现状：`accept(const Json&, const Json&)`、`replay(const ExecuteRequest&, ...)`、`request_status(...)` 都走 JSON
-- 改用 `core/record.hpp` 的 `AcceptedRecord` / `ResultRecord` + `record_json` 编解码
-- **注意**：`find_request`、`request_status`、`recover`、`describe` 四个读取方必须同步改，否则恢复语义被破坏
-- 已完成的前置：`core/record_json.hpp` 里已有 `record_schema_version = 2` 和双向转换
+落盘形状（`record_schema_version = 3`，与 `schema_version = 2` 的会话快照文件是两套版本）：
 
-### 4.2 `/input` 快照复制（第二）
+```
+cmd-N/request.json   encode(AcceptedCommand)   index / request 意图 / accepted_at_ms / effective_cwd
+cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,stderr,cleanup,timing} / finished_at_ms
+```
+
+- 回包**仍然是旧的会话 JSON**（`state` / `exit_code` / `stop_reason` / `stdout.seen`…），由 `session_store.cpp` 的 `terminal_reply()` 从记录生成；协议版本和存储版本因此互不影响。
+- `effective_cwd` 单独存放，不能折进 `request.cwd`：`same_intent()` 把「有没有 cwd」也算作意图，折进去会让重放误报 `REQUEST_CONFLICT`。
+- `Cancelled` 增加了 `cause`（requested / session_closed），`StartupFailed` 增加了 `exec_errno`。这两个字段是为了让 `stop_reason` 与 `exec_errno` 在类型化之后仍然可还原，`sessions.py` 断言了它们。
+- 单个命令的 `metrics` 不再进记录（`ExecutionResult` 里没有这个位置），会话级指标仍在快照里。
+- SDK 的 `wait()` / `result()` 直读 `result.json`，所以 `sdk/session_client.py` 里有一个 `_record_reply()`，把记录映射成回包形状；旧形状原样返回。
+- 恢复语义：只有「接受记录」存在才算跑过；缺结果时写一条 `Indeterminate` 记录（回包里显示 `interrupted`），不会重跑。
+
+### 4.2 `/input` 快照复制（下一步）
 
 - 现状：输入目录以只读 bind 挂进沙箱，宿主后续修改会改变沙箱内的可见内容
 - 设计要求：输入是**复制后的快照**
 - 目标：把复制做成 `PrepareSequence` 的一个步骤，失败按逆序回滚；复制时沿用 `artifacts.cpp` 的目录 FD 语义（拒绝符号链接、特殊文件、路径替换）
 - 相关：`core/workspace.hpp` 的 `WorkspacePolicy` 已有容量/条目/深度限制
 
-### 4.3 `session_wire` 类型化（第三）
+### 4.2 `session_wire` 类型化（下一步）
 
 - 目标文件：`src/runtime/session_wire.cpp`
 - 现状：Protobuf → JSON → 业务层 → JSON → Protobuf，两层转换
@@ -109,7 +117,7 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 - 会牵动：`sdk/` 下的 Python 客户端与 `tests/session_wire_*`、`tests/session_wire_interop`
 - 建议保留 `RawReply` 之类的过渡类型给 `status`/`files`，先切执行路径再切其余
 
-### 4.4 会话控制器接入执行核心（最后，影响面最大）
+### 4.3 会话控制器接入执行核心（最后，影响面最大）
 
 - 目标文件：`src/runtime/interactive_session.cpp`（约 560 行），重写 `event()` 与监督循环
 - 现状：会话每条命令自己维护一套 `CommandExecution` + 监督循环，与 `RunSession` 是两份实现
@@ -124,6 +132,12 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 - `sandbox_model` 必须链接 `sandbox_core`（`config.cpp` 调用 `WorkspacePolicy::validate()` 等）。`cross-verify.ps1` 查不出来，因为它是全对象一起链接
 - 往 CMakeLists 插入块时注意结尾换行，否则 `endforeach()` 会和下一条命令粘成一行，`cmake` 直接 parse error
 - 仓库必须保持 LF：`core.autocrlf=false`，脚本 CRLF 会导致 `bash` 报奇怪的错
+- **磁盘上有 12 个文件是 CRLF、索引里是 LF，而 `git status` 报干净**（索引 stat 缓存挡住了，`git ls-files --eol` 显示 `w/crlf`）。改动它们之后直接 `git add` 会把 CRLF 写进 blob，静默破坏上面那条 LF 纪律。名单：`include/sandbox/store.hpp`、`src/storage/run_store.cpp`、`src/runtime/session_protocol.cpp`、`src/application/service.cpp`、`src/platform/environment.cpp`、`sdk/sandbox_client.py`、`sdk/session_client.py`、`third_party/spdlog/{INSTALL,LICENSE,README.md,.gitignore,cmake/spdlogConfig.cmake.in}`。判别方法：`git hash-object <file>` 与 `git ls-files -s <file>` 的 blob 不一致而 `git status` 干净。提交前先 `-replace "\r\n","\n"` 归一，`git diff` 就只剩真实改动
+
+### 存储
+
+- **两套 `schema_version` 不要混**：会话快照 / artifacts 是 `2`（`SessionStore::write()` 负责盖章），命令记录是 `record_schema_version = 3`（由 `encode()` 自带）。记录文件必须走 `store_.write_json(name, encode(record))`，走过 `write()` 会被改成 2，然后被 `read()` 当成坏记录
+- 回包形状和存储形状是两件事。改记录结构时，`session_store.cpp` 里的 `terminal_reply()` 和 `sdk/session_client.py` 里的 `_record_reply()` 必须一起改，否则「主机活着」和「只有文件」两条路径会给出不同答案
 
 ### 运行时
 

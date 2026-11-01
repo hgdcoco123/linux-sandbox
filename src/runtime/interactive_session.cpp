@@ -36,6 +36,66 @@ StopReason stop_reason_of(CommandStop stop) {
     }
     return StopReason::supervision_failed;
 }
+// The session still accepts the legacy request type on its wire entry point; this
+// converts it once, so everything below works on the typed request.
+ExecutionRequest intent_of(const ExecuteRequest &request) {
+    std::optional<RequestKey> key;
+    if (request.request_id) {
+        key = RequestKey::parse(request.request_id->str());
+        if (!key)
+            throw SessionError("INVALID_REQUEST", "invalid request_id");
+    }
+    return ExecutionRequest::create(request.argv, request.cwd, request.env, request.timeout,
+                                    std::move(key));
+}
+OutputResult output_of(const StreamReport &report) {
+    OutputResult output;
+    output.saved_bytes = report.saved;
+    output.discarded_bytes = report.discarded;
+    output.failed_bytes = report.failed_bytes;
+    output.queue_peak_bytes = report.queue_peak_bytes;
+    output.backpressure_events = report.backpressure_events;
+    output.eof = report.eof;
+    output.flushed = report.flushed;
+    output.write_error = report.write_error;
+    return output;
+}
+ExecutionOutcome outcome_of(const CommandFacts &facts) {
+    switch (facts.reason) {
+    case StopReason::exited:
+        if (facts.signal && *facts.signal != no_signal)
+            return ExecutionOutcome(Signaled{*facts.signal});
+        return ExecutionOutcome(Exited{facts.exit_code.value_or(no_exit_code)});
+    case StopReason::cancelled:
+        return ExecutionOutcome(Cancelled{CancelCause::requested});
+    case StopReason::session_closed:
+        return ExecutionOutcome(Cancelled{CancelCause::session_closed});
+    case StopReason::timed_out:
+        return ExecutionOutcome(TimedOut{});
+    case StopReason::startup_failed:
+        return ExecutionOutcome(
+            StartupFailed{"exec failed", facts.exec_errno.value_or(0)});
+    case StopReason::supervision_failed:
+        return ExecutionOutcome(SupervisionFailed{"command supervision failed"});
+    }
+    return ExecutionOutcome(SupervisionFailed{"unknown command stop reason"});
+}
+// Durable completion for one session command. The command-level cleanup facts are
+// the ones init established before reporting: it only reports a command done after
+// observing the descendant set empty.
+FinishedCommand finished_of(const CommandRecord &record) {
+    if (!record.facts)
+        throw std::logic_error("command finished without terminal facts");
+    const auto &facts = *record.facts;
+    FinishedCommand finished{*CommandIndex::parse(record.id.str()), ExecutionResult{},
+                             std::chrono::system_clock::now()};
+    finished.result.outcome = outcome_of(facts);
+    finished.result.out = output_of(record.out);
+    finished.result.err = output_of(record.err);
+    finished.result.cleanup.descendants_gone = true;
+    finished.result.timing.execution = facts.elapsed;
+    return finished;
+}
 } // namespace
 namespace {
 bool overlap(const fs::path &a, const fs::path &b) {
@@ -124,7 +184,8 @@ class SessionController {
         persist();
     }
     Json start(const ExecuteRequest &request) {
-        if (auto existing = records_->replay(request, current()))
+        const auto intent = intent_of(request);
+        if (auto existing = records_->replay(intent, current()))
             return *existing;
         lifecycle_.require_idle();
         if (counter_ >= 1024)
@@ -151,7 +212,8 @@ class SessionController {
         prepared->started = started;
         prepared->wall_ms = command.limits.wall_ms;
         // Durable acceptance is the boundary after which this request cannot be rerun.
-        records_->accept(request.json(), prepared->record->json());
+        records_->accept(AcceptedCommand{index, intent, std::chrono::system_clock::now(),
+                                         fs::path(command.cwd)});
         execution_ = std::move(prepared);
         lifecycle_.transition(SessionState::running);
         auto &channel = launcher_->init_channel();
@@ -196,7 +258,7 @@ class SessionController {
                 if constexpr (std::is_same_v<T, Status>) {
                     return snapshot();
                 } else if constexpr (std::is_same_v<T, RequestStatusQuery>) {
-                    return records_->request_status(value.key.str(), current());
+                    return records_->request_status(value.key, current());
                 } else if constexpr (std::is_same_v<T, Execute>) {
                     // Transitional: the storage layer still speaks the legacy
                     // request type, so the typed request is converted once here.
@@ -238,7 +300,7 @@ class SessionController {
                         execution_->input.write.reset();
                     return {{"closed", true}};
                 } else if constexpr (std::is_same_v<T, ReadResult>) {
-                    return records_->result(value.command.str());
+                    return records_->result(value.command);
                 } else if constexpr (std::is_same_v<T, ReadOutput>) {
                     if (value.offset > config_.limits.capture_bytes)
                         throw std::runtime_error("offset exceeds capture limit");
@@ -420,7 +482,7 @@ class SessionController {
                         }
                     }
                     execution_->finish(std::move(metrics));
-                    records_->finish(current());
+                    records_->finish(finished_of(*execution_->record));
                     last_ = current();
                     execution_.reset();
                     if (!lifecycle_.stopping())

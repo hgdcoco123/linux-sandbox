@@ -27,7 +27,18 @@ struct Signaled {
 struct TimedOut {
     friend bool operator==(const TimedOut &, const TimedOut &) = default;
 };
+// Why the command was stopped by the sandbox rather than by itself. The
+// distinction is kept because "the caller cancelled this command" and "the
+// session holding it went away" are different facts: one is retryable by the
+// same caller, the other is not.
+enum class CancelCause {
+    requested,
+    session_closed,
+};
+const char *cancel_cause_name(CancelCause) noexcept;
+
 struct Cancelled {
+    CancelCause cause = CancelCause::requested;
     friend bool operator==(const Cancelled &, const Cancelled &) = default;
 };
 // The memory controller killed the group. Kept apart from Signaled because the
@@ -40,6 +51,9 @@ struct Oom {
 // target never ran to a conclusion of its own.
 struct StartupFailed {
     std::string reason;
+    // The exec failure behind the reason, when the kernel reported one. 0 is a
+    // sentinel for "no errno recorded"; a real exec never fails with 0.
+    int exec_errno = 0;
     friend bool operator==(const StartupFailed &, const StartupFailed &) = default;
 };
 // The supervisor itself failed. Never reported as a target exit.

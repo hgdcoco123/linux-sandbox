@@ -25,6 +25,16 @@ const char *ExecutionOutcome::name() const noexcept {
     }
 }
 
+const char *cancel_cause_name(CancelCause cause) noexcept {
+    switch (cause) {
+    case CancelCause::requested:
+        return "requested";
+    case CancelCause::session_closed:
+        return "session_closed";
+    }
+    return "requested";
+}
+
 bool ExecutionOutcome::is_success() const noexcept {
     auto *exited = std::get_if<Exited>(&value_);
     return exited != nullptr && exited->code == 0;

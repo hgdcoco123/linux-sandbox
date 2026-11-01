@@ -24,11 +24,12 @@
 
 ### P3.6 会话路径类型化（最大一块）
 
-**已完成的第一步**：`core/ops_json` 提供 `session_request_from_json()`，把客户端 JSON 请求
-转成类型化 `SessionRequest`，带闭合字段集（未知字段拒绝）与逐字段类型检查；9 种操作 +
-3 种 workspace 子操作全部覆盖，`ops_json_tests` 有 30 余条接受/拒绝断言。
-下一步是把 `interactive_session::handle(const Json&)` 换成 `handle(const SessionRequest&)`,
-这一步才需要动 `SessionStore` 与旧 `ExecuteRequest`。
+**已完成**：`core/ops_json` 的请求解码；`interactive_session::handle(const SessionRequest&)` 的
+`std::visit` 分派；`SessionStore` 的持久化记录类型化（`AcceptedCommand`/`FinishedCommand` +
+`record_json`，v3 记录格式，v2 旧记录只读兼容）。
+
+**仍待做**：`session_wire` 仍是 Protobuf → JSON → 业务层 → JSON → Protobuf；
+`CommandRecord` / `CommandFacts` 仍活在会话热路径上（第 3 步要删）；回包仍是 JSON。
 
 **执行顺序与红线见 [MIGRATION_SESSION.md](MIGRATION_SESSION.md)。**
 

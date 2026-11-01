@@ -20,6 +20,50 @@ import uuid
 from .sandbox_client import SandboxClient, SandboxError
 
 
+def _record_reply(document):
+    """Present a stored command record in the reply shape the client expects.
+
+    Storage has its own version (see docs/REDESIGN.md §9): result.json holds a
+    core record, not the wire reply. A client that reads it without asking the
+    host has to map it, and early builds stored the reply itself, so both shapes
+    are accepted here. Keys that never existed for a legacy document are simply
+    absent, which is why this maps rather than renames.
+    """
+    if not isinstance(document, dict) or "result" not in document:
+        return document
+    result = document["result"]
+    outcome = result.get("outcome") or {}
+    kind = outcome.get("kind")
+    reply = {
+        "command_id": document.get("index"),
+        "state": "interrupted" if kind == "indeterminate" else "finished",
+        "exit_code": outcome.get("exit_code"),
+        "signal": outcome.get("signal"),
+        "exec_errno": outcome.get("exec_errno"),
+        "execution_ms": (result.get("timing") or {}).get("execution_us", 0) // 1000,
+    }
+    stop_reason = {
+        "exited": "main_exited",
+        "signaled": "main_exited",
+        "timeout": "timeout",
+        "cancelled": ("session_closed" if outcome.get("cause") == "session_closed"
+                      else "cancelled"),
+        "startup_failure": "startup_failure",
+        "supervision_failure": "host_error",
+    }.get(kind)
+    if stop_reason:
+        reply["stop_reason"] = stop_reason
+    for name in ("stdout", "stderr"):
+        stream = result.get(name)
+        if not stream:
+            continue
+        summary = dict(stream)
+        summary["seen"] = stream.get("saved_bytes", 0) + stream.get("discarded_bytes", 0)
+        summary["stored"] = stream.get("saved_bytes", 0)
+        reply[name] = summary
+    return reply
+
+
 @dataclass
 class CommandHandle:
     session: "SessionHandle"
@@ -29,7 +73,7 @@ class CommandHandle:
     def result(self, _timeout=5):
         saved = self.session.directory / self.command_id / "result.json"
         if saved.exists():
-            return json.loads(saved.read_text(encoding="utf-8"))
+            return _record_reply(json.loads(saved.read_text(encoding="utf-8")))
         return self.session.request(op="result", command_id=self.command_id, _timeout=_timeout)
 
     def wait(self, timeout=None):
@@ -37,7 +81,7 @@ class CommandHandle:
         while True:
             saved = self.session.directory / self.command_id / "result.json"
             if saved.exists():
-                result = json.loads(saved.read_text(encoding="utf-8"))
+                result = _record_reply(json.loads(saved.read_text(encoding="utf-8")))
                 if result["state"] in ("finished", "interrupted"):
                     return result
             remaining = None if deadline is None else deadline - time.monotonic()

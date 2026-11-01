@@ -39,6 +39,10 @@ Json encode_outcome(const ExecutionOutcome &outcome) {
         value["signal"] = *signal;
     if (const auto *reason = outcome.reason())
         value["reason"] = *reason;
+    if (const auto *cancelled = std::get_if<Cancelled>(&outcome.variant()))
+        value["cause"] = cancel_cause_name(cancelled->cause);
+    if (const auto *failed = std::get_if<StartupFailed>(&outcome.variant()))
+        value["exec_errno"] = failed->exec_errno;
     return value;
 }
 
@@ -50,12 +54,23 @@ ExecutionOutcome decode_outcome(const Json &value) {
         return ExecutionOutcome(Signaled{value.at("signal").get<int>()});
     if (kind == "timeout")
         return ExecutionOutcome(TimedOut{});
-    if (kind == "cancelled")
-        return ExecutionOutcome(Cancelled{});
+    if (kind == "cancelled") {
+        // Absent cause means "requested": that is what every v2 record said.
+        auto cause = CancelCause::requested;
+        if (value.contains("cause")) {
+            const auto name = value.at("cause").get<std::string>();
+            if (name == "session_closed")
+                cause = CancelCause::session_closed;
+            else if (name != "requested")
+                throw std::runtime_error("unknown cancel cause: " + name);
+        }
+        return ExecutionOutcome(Cancelled{cause});
+    }
     if (kind == "oom")
         return ExecutionOutcome(Oom{});
     if (kind == "startup_failure")
-        return ExecutionOutcome(StartupFailed{value.at("reason").get<std::string>()});
+        return ExecutionOutcome(StartupFailed{value.at("reason").get<std::string>(),
+                                              value.value("exec_errno", 0)});
     if (kind == "supervision_failure")
         return ExecutionOutcome(SupervisionFailed{value.at("reason").get<std::string>()});
     if (kind == "indeterminate")
@@ -177,10 +192,13 @@ CommandIndex decode_index(const Json &value) {
 } // namespace
 
 Json encode(const AcceptedCommand &accepted) {
-    return Json{{"schema_version", record_schema_version},
-                {"index", accepted.index.str()},
-                {"accepted_at_ms", to_ms(accepted.accepted_at)},
-                {"request", encode_request_fields(accepted.request)}};
+    Json value{{"schema_version", record_schema_version},
+               {"index", accepted.index.str()},
+               {"accepted_at_ms", to_ms(accepted.accepted_at)},
+               {"request", encode_request_fields(accepted.request)}};
+    if (accepted.effective_cwd)
+        value["effective_cwd"] = utf8_of(*accepted.effective_cwd);
+    return value;
 }
 
 Json encode(const FinishedCommand &finished) {
@@ -202,9 +220,12 @@ std::optional<AcceptedCommand> decode_accepted(const Json &value, std::string &e
             error = "unsupported record schema_version " + std::to_string(version);
             return std::nullopt;
         }
-        AcceptedCommand accepted{decode_index(value),
-                                 decode_request_fields(value.at("request")),
-                                 from_ms(value.at("accepted_at_ms").get<long long>())};
+        AcceptedCommand accepted{decode_index(value), decode_request_fields(value.at("request")),
+                                 from_ms(value.at("accepted_at_ms").get<long long>()),
+                                 std::nullopt};
+        if (value.contains("effective_cwd"))
+            accepted.effective_cwd =
+                std::filesystem::path(value.at("effective_cwd").get<std::string>());
         return accepted;
     } catch (const std::exception &failure) {
         error = failure.what();

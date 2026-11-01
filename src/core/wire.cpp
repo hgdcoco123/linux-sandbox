@@ -65,11 +65,15 @@ void encode_outcome(Writer &writer, const ExecutionOutcome &outcome) {
         writer.u8(2);
     } else if (std::holds_alternative<Cancelled>(value)) {
         writer.u8(3);
+        const auto &cancelled = std::get<Cancelled>(value);
+        writer.u8(cancelled.cause == CancelCause::session_closed ? 1 : 0);
     } else if (std::holds_alternative<Oom>(value)) {
         writer.u8(4);
     } else if (std::holds_alternative<StartupFailed>(value)) {
         writer.u8(5);
-        writer.text(std::get<StartupFailed>(value).reason);
+        const auto &failed = std::get<StartupFailed>(value);
+        writer.text(failed.reason);
+        writer.varint(static_cast<std::uint64_t>(failed.exec_errno));
     } else if (std::holds_alternative<SupervisionFailed>(value)) {
         writer.u8(6);
         writer.text(std::get<SupervisionFailed>(value).reason);
@@ -87,12 +91,23 @@ ExecutionOutcome decode_outcome(Reader &reader) {
         return ExecutionOutcome(Signaled{static_cast<int>(reader.varint())});
     case 2:
         return ExecutionOutcome(TimedOut{});
-    case 3:
-        return ExecutionOutcome(Cancelled{});
+    case 3: {
+        const auto tag = reader.u8();
+        if (tag > 1)
+            fail("BAD_WIRE_PACKET", "unknown cancel cause");
+        return ExecutionOutcome(Cancelled{tag == 1 ? CancelCause::session_closed
+                                                   : CancelCause::requested});
+    }
     case 4:
         return ExecutionOutcome(Oom{});
-    case 5:
-        return ExecutionOutcome(StartupFailed{reader.text()});
+    case 5: {
+        auto reason = reader.text();
+        auto errno_value = reader.varint();
+        if (errno_value > 0xFFFFu)
+            fail("BAD_WIRE_PACKET", "exec errno out of range");
+        return ExecutionOutcome(
+            StartupFailed{std::move(reason), static_cast<int>(errno_value)});
+    }
     case 6:
         return ExecutionOutcome(SupervisionFailed{reader.text()});
     case 7:

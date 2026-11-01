@@ -13,7 +13,14 @@ namespace sandbox {
 
 using Json = nlohmann::json;
 
-inline constexpr int record_schema_version = 2;
+// Storage format version. This is the *record* format, deliberately independent
+// of both the session protocol version and the control-frame version: a stored
+// record that cannot be decoded is reported, never guessed at.
+//
+//   2 - first typed record shape (single run only)
+//   3 - adds the session facts: accepted.effective_cwd, cancelled.cause,
+//       startup_failure.exec_errno
+inline constexpr int record_schema_version = 3;
 
 Json encode(const AcceptedCommand &);
 Json encode(const FinishedCommand &);

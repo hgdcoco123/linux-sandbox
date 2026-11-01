@@ -12,7 +12,10 @@ Json ControlServer::request(const fs::path &root, const std::string &id, const J
     if (request.is_object() && request.value("op", "") == "request-status" &&
         !RunStore::inspect(root, id).at("active").get<bool>()) {
         auto parsed = validate_session_request(request);
-        return SessionStore::lookup_request(directory, parsed.at("request_id").get<std::string>());
+        auto key = RequestKey::parse(parsed.at("request_id").get<std::string>());
+        if (!key)
+            throw SessionError("INVALID_REQUEST", "invalid request_id");
+        return SessionStore::lookup_request(directory, *key);
     }
     auto path = directory / "control.sock";
     UniqueFd fd(

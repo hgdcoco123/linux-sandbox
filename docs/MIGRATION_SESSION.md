@@ -13,16 +13,22 @@ SDK 和测试，中间态不可编译，也无法分阶段验收。
 
 ## 步骤
 
-### 第 1 步：`SessionStore` 接受类型化请求（保留旧入口）
+### 第 1 步：`SessionStore` 接受类型化请求（保留旧入口）—— **已完成**
 
-- 在 `session_store.hpp` 增加 `replay(const ExecutionRequest&, ...)` 与
-  `accept(const ExecutionRequest&, const CommandIndex&)` 重载，内部用
-  `core/record` 的 `AcceptedCommand` 落盘，`same_intent()` 由 `ExecutionRequest` 提供。
-- 旧重载保留并委托到新实现（把旧 `ExecuteRequest` 转成 `ExecutionRequest`），
-  这样仓库始终可编译。
-- **红线**：`same_intent` 的判等语义必须保持——`cwd`/`env` 的"存在性"参与比较，
-  显式空 env 与继承 env 不是同一个请求。`core_tests` 已有对应断言。
-- 验收：`session_contract`、`session_store` 测试仍通过；新增一条"旧记录可被新代码读回"的用例。
+落地方式与原计划的差异，写给下一个人：
+
+- 没有保留旧重载。调用方只有三处，同一次提交里全部改完，旧 `accept(Json, Json)` / `finish(Json)` /
+  `replay(ExecuteRequest&)` 直接删掉，避免两套入口长期并存。
+- **旧记录仍然可读**：`session_store.cpp` 里有 `decode_accepted_record` / `decode_finished_record`，
+  按 `index` / `command` 之类的键判别 v3 记录与 v2 旧形状，v2 只读不写。`session_store_tests`
+  有一条测试专门写一份 v2 记录再读回来。
+- 结果类型补了两个事实：`Cancelled::cause`（requested / session_closed）与
+  `StartupFailed::exec_errno`。没有它们，旧回包里的 `stop_reason` 与 `exec_errno` 无法还原，
+  而 `sessions.py` 断言了这两者。
+- `AcceptedCommand` 增加 `effective_cwd`：会话会解析出实际工作目录，它属于命令事实但不属于请求意图
+  （`same_intent()` 把 cwd 的存在性算进意图，折进去会让重放误报冲突）。
+
+- 验收：`session_contract`、`session_store`、`sessions` 全绿；已跑 4 次稳定。
 
 ### 第 2 步：`SessionController::handle` 换成类型化
 

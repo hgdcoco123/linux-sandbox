@@ -10,6 +10,8 @@
 #include "sandbox/core/result.hpp"
 
 #include <chrono>
+#include <filesystem>
+#include <optional>
 
 namespace sandbox {
 
@@ -20,6 +22,13 @@ struct AcceptedCommand {
     CommandIndex index;
     ExecutionRequest request;
     std::chrono::system_clock::time_point accepted_at;
+    // Sessions resolve the working directory once, before dispatch: a caller may
+    // omit cwd and the session default applies. That resolved path is a fact
+    // about the command, but it is not part of the request's intent (replay
+    // compares the request exactly as it arrived, presence of cwd included), so
+    // it is stored beside the request rather than folded into it. Absent for a
+    // single run, where the request is the whole story.
+    std::optional<std::filesystem::path> effective_cwd;
 };
 
 // Durable completion. Absent for a request that was accepted but whose result
