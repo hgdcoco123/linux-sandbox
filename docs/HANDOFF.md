@@ -23,6 +23,7 @@
 | `eeef4ea` | 会话每条命令一个 `ExecutionCore`；`CommandRecord`/`CommandFacts` 退出运行时 |
 | `6cb8bd5` | 删除遗留 `CommandRecord`/`CommandFacts`/`StopReason`/`CommandPhase` |
 | `4d1c802` | `SessionStore` 返回类型化 `CommandReport`，回包渲染搬到 wire 层 |
+| 本轮之后 | `src/runtime/init.cpp` 合并了两份 PID 1（P5），`persistent_init.cpp` 删除 |
 
 工作副本在 `C:\Users\lipinzheng\documents\deepseek-harness\default-workspace\sbx`（同一个 git 仓库的 clone，分支 `master`）。
 

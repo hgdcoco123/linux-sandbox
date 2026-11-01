@@ -51,11 +51,15 @@
 建议顺序：先把 `SessionStore` 迁到 `core/record` 的类型化记录（请求/终态），再换
 `handle`，最后改 SDK。迁移的红线是 `same_intent()` 的判等语义与已落盘请求的可解析性。
 
-### P5 合并两个 init
+### P5 合并两个 init（**已完成**）
 
-`src/runtime/init.cpp` 与 `persistent_init.cpp` 是两份 PID 1：reap 顺序、subreaper、
-seccomp 安装点各写一遍。合并方式是给一个 init 加 `mode`（one-shot / persistent），
-共享 prepare、exec、wait、reap 四段，只有命令循环不同。
+`init.cpp` 与 `persistent_init.cpp` 现在是**一份** `src/runtime/init.cpp`（`persistent_init.cpp` 已删除）：
+
+- `init_main()` 只按 `config.persistent` 分派到 `run_once()` / `run_persistent()`。
+- 共用的一段：`arm_init` / `prepare_environment` / PREPARE-EnvReady 握手 / `spawn_target()`（fork + 执行前设置 + exec-error 管道）/ `supervise_command()`（poll、waitpid、宽限期后升级 SIGKILL、完成条件）/ `signal_children()`（隔离模式 `kill(-1)`，诊断模式按 `/proc/.../children` 枚举）。
+- 两种模式的区别被压缩成参数：`SupervisionRules`（wall 期限归谁、grace、关闭期限）与 `CommandWatcher`（是否**即时**上报 `MainExit`/`StartFailed`——单次执行需要，会话模式按 `CommandDone` 一次性上报）。
+- exec 失败记录统一成 `ExecFailure{stage, error}`（写在 `init_common.hpp`），两种模式从此只有一个写者、一个读者。实测单次执行报 `exec_error: stage=6, errno=2`。
+- **顺序上的红线**（合并时踩到过）：会话关闭时 init 必须先发 `CommandDone` 再发 `InitDone`，否则监督端永远等不到命令终态。实测关闭运行中的命令，记录里仍是 `cancelled/session_closed`。
 
 ### P7 批次接入
 

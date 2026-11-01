@@ -99,7 +99,7 @@ add_library(sandbox_runtime
   src/resources/cgroup.cpp src/runtime/output_capture.cpp
   src/runtime/launcher_client.cpp src/runtime/run_session.cpp
   src/isolation/rootfs.cpp src/isolation/security.cpp src/runtime/init.cpp src/runtime/init_common.cpp
-  src/application/service.cpp src/runtime/persistent_init.cpp
+  src/application/service.cpp
   src/runtime/interactive_session.cpp src/storage/artifacts.cpp
   src/runtime/session_protocol.cpp src/runtime/session_wire.cpp ${SESSION_PROTO_SOURCES} src/storage/session_store.cpp src/storage/workspace_service.cpp
   src/platform/event_loop.cpp src/runtime/batch.cpp)

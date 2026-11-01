@@ -1,13 +1,32 @@
 #pragma once
-// Steps shared by both pid-1 implementations (one-shot and persistent).
+// Steps shared by both pid-1 modes (one-shot and persistent).
 //
-// Only the environment half lives here: the command loop differs by design, but
-// "how the namespace and credentials are brought up" must not be written twice,
-// because the two copies drifted apart once already.
+// The two modes differ in one thing only: how many commands this init will run.
+// Everything that is true of a pid-1 regardless — tying itself to the supervisor's
+// lifetime, adopting orphans, building the environment, dropping capabilities, and
+// supervising one target process — lives here or in init.cpp, once.
 #include "sandbox/config.hpp"
 #include "sandbox/protocol.hpp"
 
 namespace sandbox {
+
+// What the target's child side writes into the exec-error pipe when it cannot
+// reach execve. The stage says where it stopped, because "exec failed" without
+// that is not diagnosable.
+struct ExecFailure {
+    int stage;
+    int error;
+};
+
+// Stages reported through ExecFailure::stage.
+enum : int {
+    exec_stage_pdeathsig = 1,
+    exec_stage_setpgid = 2,
+    exec_stage_chdir = 3,
+    exec_stage_descriptors = 4,
+    exec_stage_security = 5,
+    exec_stage_execve = 6,
+};
 
 // Fast, side-effect-free steps that must happen before any message is awaited:
 // tie init to the supervisor's lifetime, and adopt orphans in the diagnostic
