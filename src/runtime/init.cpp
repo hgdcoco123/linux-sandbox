@@ -135,6 +135,9 @@ struct SupervisionRules {
 struct CommandWatcher {
     std::function<void(int exit_code, int signal)> main_exited;
     std::function<void(int stage, int error)> start_failed;
+    // The exec succeeded. The supervisor distinguishes "the target ran" from
+    // "the environment came up", and only this fact says the former.
+    std::function<void()> exec_observed;
 };
 
 struct CommandOutcome {
@@ -211,6 +214,8 @@ CommandOutcome supervise_command(ControlChannel &control, const SupervisionRules
                 if (size)
                     throw std::runtime_error("partial exec failure");
                 resolved = true;
+                if (watcher.exec_observed)
+                    watcher.exec_observed();
                 break;
             }
             if (resolved) {
@@ -285,6 +290,12 @@ int run_once(ControlChannel &control, const RunConfig &config, const fs::path &r
         [&](int stage, int error) {
             try {
                 control.send(StartFailed{stage, error});
+            } catch (...) {
+            }
+        },
+        [&] {
+            try {
+                control.send(ExecObserved{});
             } catch (...) {
             }
         }};

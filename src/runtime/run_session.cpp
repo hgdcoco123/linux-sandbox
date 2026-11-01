@@ -34,11 +34,12 @@ SupervisionLimits core_limits(const RunConfig &config) {
     SupervisionLimits core;
     core.startup = Millis{static_cast<std::int64_t>(limits.startup_ms)};
     core.wall = Millis{static_cast<std::int64_t>(limits.wall_ms)};
-    // The diagnostic backend has no cgroup to kill: init escalates to SIGKILL on
-    // its own after grace_ms, and it needs room to do that before the supervisor
-    // takes the init process down. The isolated backend can kill the whole group
-    // immediately, so it keeps the plain grace period.
-    const auto extra = options.mode == "isolated" ? 0 : 1000;
+    // init escalates to SIGKILL on its own after grace_ms and then needs a moment to
+    // reap and report. The supervisor's kill is the backstop for a *stuck* init, so
+    // it must never fire first: killing init before it reports turns an ordinary
+    // timeout into "init exited unexpectedly". The diagnostic backend gets a longer
+    // extra because it also has to walk /proc to signal its children.
+    const auto extra = options.mode == "isolated" ? 500 : 1000;
     core.grace = Millis{static_cast<std::int64_t>(limits.grace_ms) + extra};
     // Drain and settle are supervision allowances, not user policy: they bound
     // how long we keep waiting for facts that should already be on their way.
