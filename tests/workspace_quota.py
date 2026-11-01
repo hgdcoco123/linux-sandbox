@@ -85,20 +85,26 @@ with tempfile.TemporaryDirectory(prefix="sbx-quota-") as temporary:
     assert session.execute([fixture, "session-write"]).wait(10)["exit_code"] == 0
     transfer = session.directory / "transfer"
     original = transfer.stat().st_mode
-    os.chmod(transfer, 0o500)
     try:
+        os.chmod(transfer, 0o500)
         blocked = False
         try:
             session.export(root / "blocked-export")
         except SandboxError:
             blocked = True
         assert blocked, "an export that cannot be handed over must not succeed"
+        # Keep the handover blocked until the session closes: with keep_on_close the
+        # session promised to keep the artifacts, and it could not deliver them.
+        try:
+            session.close()
+        except SandboxError:
+            pass  # a failed delivery is reported through the result, not by close()
+        facts, report = facts_of(session)
     finally:
         os.chmod(transfer, original)
-    session.close()
-    facts, report = facts_of(session)
     assert facts.get("export", {}).get("ok") is False, facts
     assert facts.get("export", {}).get("error"), facts
+    assert report.get("errors"), "artifacts that were not delivered must not read as success"
     print("a blocked export is reported as an export failure")
 
     # 4. init dying mid-command: artifacts may be undeliverable, but the session must

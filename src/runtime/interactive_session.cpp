@@ -189,7 +189,13 @@ class SessionController {
             throw SessionError("SESSION_BUSY",
                                "the workspace cannot be read while a command runs");
         const auto tag = "out-" + std::to_string(++export_sequence_);
+        // The reported facts describe the *last* attempt: an earlier success must
+        // never be able to make a later failure look delivered.
         export_attempted_ = true;
+        export_ok_ = false;
+        export_error_.clear();
+        export_bytes_ = 0;
+        export_entries_ = 0;
         std::error_code failure;
         fs::remove_all(transfer_ / tag, failure);
         launcher_->init_channel().send(ExportTree{tag});
@@ -205,6 +211,7 @@ class SessionController {
         auto published = store_->directory() / "workspace";
         fs::remove_all(published, failure);
         if (failure) {
+            export_ok_ = false;
             export_error_ = "publish: " + failure.message();
             throw SessionError("EXPORT_FAILED", export_error_);
         }
