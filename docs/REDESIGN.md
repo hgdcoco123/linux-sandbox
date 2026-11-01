@@ -158,6 +158,28 @@ launcher 步骤的撤销是 `LauncherClient::abort()`。
 - 输出仍是有界队列 + 写线程；`write()` 完成不等于 `fsync()` 完成，报告里始终分开。
 - 隔离准备失败一律停止启动，**没有**退回 process 模式的路径。
 
+## 4.1 三处边界：定过，别再翻
+
+这三条都是"看起来还能更彻底"的地方，结论是不做。理由记在这里，是为了让下一个人不必重新论证一遍。
+
+**回包 payload 保持"记录 → 渲染成 JSON"，不引入 `RawReply{Json}`。**
+`proto/session_v1.proto` 已经把回包形状钉死了（`StatusResponse`/`CommandRecord` 是固定字段，
+`metrics_json` 明确是不透明的 `bytes`，注释里写明它是为了保住无符号 64 位计数、null 和浮点速率）。
+在进程内再包一层 `RawReply{Json}` 不会多出任何类型安全：还是那坨 JSON，换个名字，附带一套会和
+`session_wire::command_report_to_json()` 漂移的第二渲染器。**类型化的收益在请求方向**（无效数据进不了
+执行核心），那一半已经拿到；回包方向是从已验证记录流出，风险是渲染 bug，由记录测试与跨语言 interop 覆盖。
+真要继续，正确的起点是先回答"观测数据在业务类型里怎么表达"，而不是先给 JSON 改个名。
+
+**per-command `metrics` 不进持久化记录。**
+`ExecutionResult` 表达执行事实（outcome / output / cleanup / timing），`metrics` 是可扩展观测，
+两者生命周期不同：观测属于运行/会话报告（`MetricsSampler` 的有界历史 + 最终报告），不属于一条命令的
+终态。把内核定义的 `cpu.stat` 键做成业务字段，只会得到一个永远不完整的类型。
+代价是有意识放弃 per-command 的 cpu/内存归因，会话级仍在，且目前没有消费者（SDK 与测试都不读）。
+
+**`RunReport` 保持适配层，不改为"由 `ExecutionResult` 直接序列化"。**
+它承载 `ExecutionResult` 之外的东西：`errors`、`cleanup_errors`、`metrics`、`verdict`、`summary` 词汇表。
+把适配层认成技术债、硬塞回核心类型，会让核心去承担 CLI 与批次的表现需求。
+
 ## 5. 路线
 
 | 阶段 | 内容 | 状态 |

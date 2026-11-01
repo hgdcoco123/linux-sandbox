@@ -295,6 +295,11 @@ class SessionController {
     }
     // Typed dispatch: the wire shape is decoded once, before this point, so every
     // branch here works on validated business types.
+    //
+    // The return value is deliberately Json: it is the *protocol's* vocabulary,
+    // which proto/session_v1.proto already fixes (metrics included, as an opaque
+    // blob), not a business type that would have to be invented and kept in step.
+    // Durable answers are rendered from records by session_wire; see REDESIGN §4.1.
     Json handle(const SessionRequest &request) {
         const auto check_active = [&](const CommandIndex &command) {
             if (!execution_ || !execution_->accepted ||

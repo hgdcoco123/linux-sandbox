@@ -78,9 +78,15 @@
 
 仍待做：
 
-- `RunReport` 只是适配层，最终应改为由 `ExecutionResult` 直接序列化
+- P7 批次接入执行核心（**范围判定**：批次属于多运行编排，不在"单沙箱内部"的范围里，所以本轮没做）
 - 隔离路径（`tools/delegated_run.py`）只在放开 `kernel.apparmor_restrict_unprivileged_userns`
   的机器上跑得起来；最后一次全绿是在这次 init 合并**之前**，合并后未重跑
+
+已决定不做（理由见 REDESIGN §4.1，不要重新论证）：
+
+- 回包 payload 类型化（`RawReply{Json}`）
+- per-command `metrics` 进记录
+- `RunReport` 改成由 `ExecutionResult` 直接序列化
 
 已完成：
 
