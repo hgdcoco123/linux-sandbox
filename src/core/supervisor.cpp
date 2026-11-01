@@ -70,8 +70,12 @@ void ExecutionCore::decide_outcome() {
         outcome_ = oom_ ? ExecutionOutcome(Oom{}) : ExecutionOutcome(Signaled{*natural_signal_});
     } else if (intent_ == StopIntent::timeout) {
         outcome_ = ExecutionOutcome(TimedOut{});
+    } else if (intent_ == StopIntent::session_closed) {
+        // Who asked is part of the fact: a session going away is not the caller
+        // cancelling this command.
+        outcome_ = ExecutionOutcome(Cancelled{CancelCause::session_closed});
     } else if (intent_) {
-        outcome_ = ExecutionOutcome(Cancelled{});
+        outcome_ = ExecutionOutcome(Cancelled{CancelCause::requested});
     } else if (oom_) {
         outcome_ = ExecutionOutcome(Oom{});
     }
@@ -198,6 +202,19 @@ std::vector<SupervisionAction> ExecutionCore::start_failed(std::string reason, M
         return {};
     if (!outcome_)
         outcome_ = ExecutionOutcome(StartupFailed{std::move(reason)});
+    if (phase_ == Phase::stopping || phase_ == Phase::draining || phase_ == Phase::failed)
+        return maybe_finish(now);
+    phase_ = Phase::stopping;
+    stop_at_ = now;
+    return {SignalTarget{sigterm}};
+}
+
+std::vector<SupervisionAction> ExecutionCore::start_failed(std::string reason, int exec_errno,
+                                                           Millis now) {
+    if (finished_)
+        return {};
+    if (!outcome_)
+        outcome_ = ExecutionOutcome(StartupFailed{std::move(reason), exec_errno});
     if (phase_ == Phase::stopping || phase_ == Phase::draining || phase_ == Phase::failed)
         return maybe_finish(now);
     phase_ = Phase::stopping;

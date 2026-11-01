@@ -73,6 +73,9 @@ class ExecutionCore {
     std::vector<SupervisionAction> prepare_failed(std::string reason, Millis now);
     // The environment came up but the target could not be exec'd.
     std::vector<SupervisionAction> start_failed(std::string reason, Millis now);
+    // Same fact with the kernel's errno kept: a caller that reports "exec failed"
+    // without saying why makes the failure undiagnosable.
+    std::vector<SupervisionAction> start_failed(std::string reason, int exec_errno, Millis now);
     std::vector<SupervisionAction> tick(Millis now);
 
     // Cleanup facts that the runtime learns after the target result is sealed.

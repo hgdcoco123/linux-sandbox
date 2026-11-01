@@ -20,23 +20,6 @@
 #include <unistd.h>
 namespace sandbox {
 namespace {
-StopReason stop_reason_of(CommandStop stop) {
-    switch (stop) {
-    case CommandStop::main_exit:
-        return StopReason::exited;
-    case CommandStop::cancelled:
-        return StopReason::cancelled;
-    case CommandStop::timeout:
-        return StopReason::timed_out;
-    case CommandStop::session_closed:
-        return StopReason::session_closed;
-    case CommandStop::startup_failure:
-        return StopReason::startup_failed;
-    case CommandStop::supervision_failure:
-        return StopReason::supervision_failed;
-    }
-    return StopReason::supervision_failed;
-}
 // The session still accepts the legacy request type on its wire entry point; this
 // converts it once, so everything below works on the typed request.
 ExecutionRequest intent_of(const ExecuteRequest &request) {
@@ -49,53 +32,28 @@ ExecutionRequest intent_of(const ExecuteRequest &request) {
     return ExecutionRequest::create(request.argv, request.cwd, request.env, request.timeout,
                                     std::move(key));
 }
-OutputResult output_of(const StreamReport &report) {
-    OutputResult output;
-    output.saved_bytes = report.saved;
-    output.discarded_bytes = report.discarded;
-    output.failed_bytes = report.failed_bytes;
-    output.queue_peak_bytes = report.queue_peak_bytes;
-    output.backpressure_events = report.backpressure_events;
-    output.eof = report.eof;
-    output.flushed = report.flushed;
-    output.write_error = report.write_error;
-    return output;
+OutputStats stats_of(const StreamReport &report) {
+    OutputStats stats;
+    stats.saved_bytes = report.saved;
+    stats.discarded_bytes = report.discarded;
+    stats.failed_bytes = report.failed_bytes;
+    stats.queue_peak_bytes = report.queue_peak_bytes;
+    stats.backpressure_events = report.backpressure_events;
+    stats.write_error = report.write_error;
+    return stats;
 }
-ExecutionOutcome outcome_of(const CommandFacts &facts) {
-    switch (facts.reason) {
-    case StopReason::exited:
-        if (facts.signal && *facts.signal != no_signal)
-            return ExecutionOutcome(Signaled{*facts.signal});
-        return ExecutionOutcome(Exited{facts.exit_code.value_or(no_exit_code)});
-    case StopReason::cancelled:
-        return ExecutionOutcome(Cancelled{CancelCause::requested});
-    case StopReason::session_closed:
-        return ExecutionOutcome(Cancelled{CancelCause::session_closed});
-    case StopReason::timed_out:
-        return ExecutionOutcome(TimedOut{});
-    case StopReason::startup_failed:
-        return ExecutionOutcome(
-            StartupFailed{"exec failed", facts.exec_errno.value_or(0)});
-    case StopReason::supervision_failed:
-        return ExecutionOutcome(SupervisionFailed{"command supervision failed"});
-    }
-    return ExecutionOutcome(SupervisionFailed{"unknown command stop reason"});
-}
-// Durable completion for one session command. The command-level cleanup facts are
-// the ones init established before reporting: it only reports a command done after
-// observing the descendant set empty.
-FinishedCommand finished_of(const CommandRecord &record) {
-    if (!record.facts)
-        throw std::logic_error("command finished without terminal facts");
-    const auto &facts = *record.facts;
-    FinishedCommand finished{*CommandIndex::parse(record.id.str()), ExecutionResult{},
-                             std::chrono::system_clock::now()};
-    finished.result.outcome = outcome_of(facts);
-    finished.result.out = output_of(record.out);
-    finished.result.err = output_of(record.err);
-    finished.result.cleanup.descendants_gone = true;
-    finished.result.timing.execution = facts.elapsed;
-    return finished;
+// The command's own budget. Grace is deliberately the same backstop the session
+// already used (wall + grace + 5000): for a session, killing the group is not a
+// per-command operation, so the core must not escalate before init has had its
+// own chance to take the command down.
+SupervisionLimits command_limits(const RunConfig &command) {
+    SupervisionLimits limits;
+    limits.startup = Millis{static_cast<std::int64_t>(command.limits.startup_ms)};
+    limits.wall = Millis{static_cast<std::int64_t>(command.limits.wall_ms)};
+    limits.grace = Millis{static_cast<std::int64_t>(command.limits.grace_ms) + 5000};
+    limits.drain = Millis{5000};
+    limits.settle = Millis{4000};
+    return limits;
 }
 } // namespace
 namespace {
@@ -122,8 +80,20 @@ class SessionController {
     std::vector<fs::path> input_snapshots_;
     SessionLifecycle lifecycle_;
     Json last_ = nullptr;
+    // The live summary of the command in flight. Once it is finished the durable
+    // record is the answer instead, so this never claims a terminal state.
     Json current() const {
-        return execution_ && execution_->record ? execution_->record->json() : Json(nullptr);
+        if (!execution_ || !execution_->accepted)
+            return nullptr;
+        const auto &accepted = *execution_->accepted;
+        Json value = {{"command_id", accepted.index.str()},
+                      {"argv", accepted.request.argv()},
+                      {"state", "running"}};
+        if (accepted.effective_cwd)
+            value["cwd"] = accepted.effective_cwd->string();
+        if (accepted.request.key())
+            value["request_id"] = accepted.request.key()->str();
+        return value;
     }
     bool done_ = false, reaped_ = false, parent_open_ = true, init_open_ = true;
     std::uint64_t created_ = 0, idle_ = 0, closed_ = 0;
@@ -174,6 +144,67 @@ class SessionController {
     void persist() {
         records_->snapshot(snapshot());
     }
+    // Apply the core's decisions. The action vocabulary is shared with single
+    // runs; what differs is who owns the process group:
+    //   SignalTarget -> init owns it, so "stop the target" means "cancel this command"
+    //   KillTarget   -> a session cannot signal one command's group on its own, so
+    //                   the escalation that is actually available is closing the
+    //                   session and letting init take everything down
+    //   ForceDrain   -> stop accepting new output so the writers can finish
+    void observe_core(const std::vector<SupervisionAction> &actions) {
+        for (const auto &action : actions) {
+            std::visit(
+                [&](const auto &value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, SignalTarget>) {
+                        // The command's group is already reported gone; a cancel
+                        // now would address the next command instead.
+                        if (!execution_ || execution_->done || !launcher_)
+                            return;
+                        try {
+                            launcher_->init_channel().send(CancelCommand{});
+                        } catch (const std::exception &e) {
+                            errors_.push_back(std::string("cancel: ") + e.what());
+                        }
+                    } else if constexpr (std::is_same_v<T, KillTarget>) {
+                        if (!lifecycle_.stopping())
+                            close("command_supervision_timeout");
+                    } else if constexpr (std::is_same_v<T, ForceDrain>) {
+                        if (execution_) {
+                            execution_->out->close_incomplete();
+                            execution_->err->close_incomplete();
+                        }
+                    }
+                },
+                action);
+        }
+    }
+    // Streaming facts for the core: EOF and "the writer finished" are different
+    // facts, so each stream reports both exactly once.
+    void observe_outputs(std::uint64_t now) {
+        if (!execution_ || !execution_->core)
+            return;
+        auto &command = *execution_;
+        const Millis when{static_cast<std::int64_t>(now)};
+        const auto out = command.out->summary();
+        if (!command.out_eof_seen && out.eof) {
+            command.out_eof_seen = true;
+            observe_core(command.core->output_eof(false, when));
+        }
+        if (!command.out_done_seen && command.out->complete()) {
+            command.out_done_seen = true;
+            observe_core(command.core->output_finished(false, stats_of(out), when));
+        }
+        const auto err = command.err->summary();
+        if (!command.err_eof_seen && err.eof) {
+            command.err_eof_seen = true;
+            observe_core(command.core->output_eof(true, when));
+        }
+        if (!command.err_done_seen && command.err->complete()) {
+            command.err_done_seen = true;
+            observe_core(command.core->output_finished(true, stats_of(err), when));
+        }
+    }
     void close(const std::string &reason) {
         if (lifecycle_.stopping())
             return;
@@ -208,15 +239,17 @@ class SessionController {
         auto prepared = std::make_unique<CommandExecution>(dir, config_.limits.capture_bytes);
         auto started = monotonic_ms();
         sample_metrics(started, true);
-        auto baseline = metrics_report();
-        prepared->record.emplace(CommandId::parse(id), request, command);
         const std::string dispatch = command.to_json().dump();
-        prepared->baseline = std::move(baseline);
         prepared->started = started;
         prepared->wall_ms = command.limits.wall_ms;
+        prepared->accepted = AcceptedCommand{
+            index, intent, std::chrono::system_clock::now(), fs::path(command.cwd)};
+        // The same execution core a single run uses. The environment is already
+        // prepared, so this command starts directly in the running phase.
+        prepared->core = std::make_unique<ExecutionCore>(command_limits(command),
+                                                         Millis{static_cast<std::int64_t>(started)});
         // Durable acceptance is the boundary after which this request cannot be rerun.
-        records_->accept(AcceptedCommand{index, intent, std::chrono::system_clock::now(),
-                                         fs::path(command.cwd)});
+        records_->accept(*prepared->accepted);
         execution_ = std::move(prepared);
         lifecycle_.transition(SessionState::running);
         auto &channel = launcher_->init_channel();
@@ -226,6 +259,7 @@ class SessionController {
             channel.send(StderrHandle{index}, execution_->error.write.get());
             channel.send(Command{index, dispatch});
             execution_->release_child_ends();
+            observe_core(execution_->core->env_ready(Millis{static_cast<std::int64_t>(started)}));
             persist();
         } catch (...) {
             execution_->release_child_ends();
@@ -235,7 +269,8 @@ class SessionController {
         return current();
     }
     Json write_stdin(const WriteStdinRequest &input) {
-        if (!execution_ || !execution_->record || execution_->record->id != input.command_id)
+        if (!execution_ || !execution_->accepted ||
+            execution_->accepted->index.str() != input.command_id.str())
             throw SessionError("COMMAND_NOT_ACTIVE", "command is no longer active");
         lifecycle_.require_running();
         if (!execution_->input.write)
@@ -247,12 +282,12 @@ class SessionController {
         if (n < 0) system_error("write command stdin");
         return {{"accepted_bytes", n}};
     }
-    // Typed dispatch. The wire shape is decoded once, in the overload below, so
-    // every branch here works on validated business types.
+    // Typed dispatch: the wire shape is decoded once, before this point, so every
+    // branch here works on validated business types.
     Json handle(const SessionRequest &request) {
         const auto check_active = [&](const CommandIndex &command) {
-            if (!execution_ || !execution_->record ||
-                execution_->record->id.str() != command.str())
+            if (!execution_ || !execution_->accepted ||
+                execution_->accepted->index.str() != command.str())
                 throw SessionError("COMMAND_NOT_ACTIVE", "command is no longer active");
         };
         return std::visit(
@@ -288,7 +323,10 @@ class SessionController {
                         check_active(*value.command);
                     if (!current().is_null() && !lifecycle_.stopping()) {
                         lifecycle_.require_running();
-                        launcher_->init_channel().send(CancelCommand{});
+                        // The stop ladder is the core's; it decides when to ask and
+                        // when asking has failed. See observe_core().
+                        observe_core(execution_->core->stop_requested(
+                            StopIntent::cancel, Millis{static_cast<std::int64_t>(monotonic_ms())}));
                         if (execution_)
                             execution_->input.write.reset();
                     }
@@ -358,17 +396,43 @@ class SessionController {
                 store_->state(RunState::running);
                 persist();
             } else if (auto *done = std::get_if<CommandDone>(&envelope.message)) {
-                if (!execution_ || !execution_->record)
+                if (!execution_ || !execution_->accepted)
                     throw std::runtime_error("command result mismatch");
-                auto facts = CommandFacts{CommandId::parse(done->command.str()), done->exit_code,
-                                          done->signal, done->exec_errno,
-                                          stop_reason_of(done->stop), done->elapsed};
-                if (facts.id != execution_->record->id)
+                if (done->command != execution_->accepted->index)
                     throw std::runtime_error("command result mismatch");
-                execution_->record->apply(std::move(facts));
+                const Millis now{static_cast<std::int64_t>(monotonic_ms())};
+                // From here the group is reported gone, so a later signal request
+                // would address whatever runs next; observe_core() drops those.
+                execution_->done = true;
+                // One message carries three facts. The reason goes first: "we asked
+                // it to stop" must decide the outcome before the kernel's SIGTERM is
+                // mistaken for the target's own death.
+                switch (done->stop) {
+                case CommandStop::cancelled:
+                    observe_core(execution_->core->stop_requested(StopIntent::cancel, now));
+                    break;
+                case CommandStop::timeout:
+                    observe_core(execution_->core->stop_requested(StopIntent::timeout, now));
+                    break;
+                case CommandStop::session_closed:
+                    observe_core(execution_->core->stop_requested(StopIntent::session_closed, now));
+                    break;
+                case CommandStop::startup_failure:
+                    observe_core(execution_->core->start_failed(
+                        "exec failed", done->exec_errno.value_or(0), now));
+                    break;
+                case CommandStop::supervision_failure:
+                    observe_core(
+                        execution_->core->supervisor_failed("command supervision failed", now));
+                    break;
+                case CommandStop::main_exit:
+                    break;
+                }
+                observe_core(execution_->core->main_exited(done->exit_code, done->signal, now));
+                // init only reports a command done after it observed the set empty.
+                observe_core(execution_->core->descendants_empty(now));
                 if (!lifecycle_.stopping())
                     lifecycle_.transition(SessionState::draining);
-                execution_->done = true;
                 if (execution_)
                     execution_->input.write.reset();
             } else if (std::holds_alternative<InitDone>(envelope.message))
@@ -461,33 +525,28 @@ class SessionController {
                 if (execution_)
                     execution_->drain();
                 drain_channels();
-                if (execution_ && execution_->drained()) {
-                    Json metrics = {{"available", static_cast<bool>(sampler_)},
-                                    {"scope", "session_cgroup_during_command"},
-                                    {"max_sampled_memory_bytes", execution_->memory_peak}};
-                    if (sampler_) {
-                        sample_metrics(monotonic_ms(), true);
-                        auto raw = metrics_report();
-                        metrics["available"] = raw.value("available", false);
-                        if (raw.contains("reason"))
-                            metrics["reason"] = raw.at("reason");
-                        for (auto key : {"usage_usec", "user_usec", "system_usec"}) {
-                            metrics["cpu.stat"][key] =
-                                session_counter_delta(execution_->baseline, raw, key);
-                            if (metrics["cpu.stat"][key].is_null())
-                                metrics["unavailable"][key] =
-                                    "missing, invalid or regressed counter";
-                        }
+                if (execution_) {
+                    observe_outputs(monotonic_ms());
+                    if (execution_ && execution_->core->finished()) {
+                        if (sampler_)
+                            sample_metrics(monotonic_ms(), true);
+                        // The core's result *is* the durable result: one model for a
+                        // single run and a session command, rendered once at the
+                        // storage and wire boundaries.
+                        records_->finish(FinishedCommand{execution_->accepted->index,
+                                                         execution_->core->result(),
+                                                         std::chrono::system_clock::now()});
+                        last_ = records_->result(execution_->accepted->index);
+                        execution_.reset();
+                        if (!lifecycle_.stopping())
+                            lifecycle_.transition(SessionState::idle);
+                        idle_ = monotonic_ms();
+                        persist();
                     }
-                    execution_->finish(std::move(metrics));
-                    records_->finish(finished_of(*execution_->record));
-                    last_ = current();
-                    execution_.reset();
-                    if (!lifecycle_.stopping())
-                        lifecycle_.transition(SessionState::idle);
-                    idle_ = monotonic_ms();
-                    persist();
                 }
+                if (execution_ && !execution_->core->finished())
+                    observe_core(execution_->core->tick(
+                        Millis{static_cast<std::int64_t>(monotonic_ms())}));
                 auto now = monotonic_ms();
                 if (signals.drain_cancel())
                     close("signal");

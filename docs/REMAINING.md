@@ -22,14 +22,16 @@
 
 ## 未完成
 
-### P3.6 会话路径类型化（最大一块）
+### P3.6 会话路径类型化（**已完成**）
 
-**已完成**：`core/ops_json` 的请求解码；`interactive_session::handle(const SessionRequest&)` 的
-`std::visit` 分派；`SessionStore` 的持久化记录类型化（`AcceptedCommand`/`FinishedCommand` +
-`record_json`，v3 记录格式，v2 旧记录只读兼容）。
+- `core/ops_json` 的请求解码、`interactive_session::handle(const SessionRequest&)` 的 `std::visit` 分派
+- `SessionStore` 的持久化记录类型化（v3 记录格式，v2 旧记录只读兼容）
+- `session_wire` 的请求方向：Protobuf 直接解成 `SessionRequest`，控制器只收一个处理函数
+- **会话控制器接入 `ExecutionCore`**：每条命令一个 core，结果直接是 `ExecutionResult`；
+  动作映射的差异（init 拥有进程组、`KillTarget` 升级为关闭会话）记在 HANDOFF §4.4
 
-**仍待做**：`session_wire` 仍是 Protobuf → JSON → 业务层 → JSON → Protobuf；
-`CommandRecord` / `CommandFacts` 仍活在会话热路径上（第 3 步要删）；回包仍是 JSON。
+仍待做的小尾巴：`CommandRecord` / `CommandFacts` 还在 `command_model.*` 与 `task_tests.cpp`
+里，运行时已不用它们。
 
 **执行顺序与红线见 [MIGRATION_SESSION.md](MIGRATION_SESSION.md)。**
 

@@ -71,8 +71,8 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 
 | # | 条目 | 状态 |
 |---|---|---|
-| 1 | 业务层全类型化，JSON 只在配置/CLI/持久化适配层 | **部分**。请求分派已是 `std::visit(SessionRequest)`；`session_wire.cpp` 仍 Protobuf→JSON；`SessionStore` 仍存 JSON |
-| 2 | 单次与会话共用一套执行核心 | **单次完成**（`ExecutionCore`）；**会话未接入**，仍是自己一套监督循环 |
+| 1 | 业务层全类型化，JSON 只在配置/CLI/持久化适配层 | **基本完成**。请求与存储都已类型化；`session_wire` 请求方向已类型化，**回包方向仍渲染成 JSON**（理由见 §4.3）；`SessionStore` 的落盘是 `record_json` |
+| 2 | 单次与会话共用一套执行核心 | **完成**。会话每条命令一个 `ExecutionCore`，结果直接是 `ExecutionResult`；`CommandRecord`/`CommandFacts` 不再参与运行时 |
 | 3 | outcome / output / cleanup 三分 | **完成**。`verdict` 与 `summary` 分开，清理失败走 125 而 `summary` 仍可 success |
 | 4 | 进程与 FD 所有权明确 | **完成**。17 种控制消息、`fd_contract`、收发两侧强制校验 |
 | 5 | 隔离准备步骤化 + 逆序回滚 | **完成**。`PrepareSequence` |
@@ -121,13 +121,22 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 
 仍待做（回包方向）：`encode_response` 仍吃 `Json answer`。下一步是给 `SessionReply` 补一个 `RawReply`（status / files 两个只读视图的边界例外），其余回包用 `Accepted` / `OutputChunk` / `ResultReply`，再由 `session_reply_to_json()` 编回旧形状保证 SDK 不变。
 
-### 4.4 会话控制器接入执行核心（最后，影响面最大）
+### 4.4 会话控制器接入执行核心（**已完成**）
 
-- 目标文件：`src/runtime/interactive_session.cpp`（约 560 行），重写 `event()` 与监督循环
-- 现状：会话每条命令自己维护一套 `CommandExecution` + 监督循环，与 `RunSession` 是两份实现
-- 目标：复用 `ExecutionCore`，会话只负责"命令之间保持环境"这一差异
-- 直接受影响的测试：`sessions`、`session_runtime`、`session_store`、`session_sdk`
-- 前提：先做完 4.1，否则存储层仍是旧模型，改完要改两遍
+做法与关键差异（改之前读一遍，别重复踩）：
+
+- 每条命令一个 `ExecutionCore`，`start()` 时构造并立刻 `env_ready()`（环境在会话级已经准备好），所以命令直接进入 running，不经过 startup 阶段。
+- init 的一条 `CommandDone` 同时携带**三个事实**：目标结束、后代集合为空、以及"是我们让它停的"。喂给 core 的顺序是：先 `stop_requested(原因)`，再 `main_exited`，最后 `descendants_empty`。顺序反了就会把"我们发的 SIGTERM"当成目标自己的死因（`sessions.py` 断言 cancel 必须报 `cancelled`）。
+- **动作映射与单次执行不同，这是两者的真实差异**：
+  - `SignalTarget` → 给 init 发 `CancelCommand`（会话的进程组归 init 管）。
+  - `KillTarget` → 会话没有"只杀这条命令"的手段（cgroup 是整个会话的），所以升级动作是 `close("command_supervision_timeout")`，由 init 统一收场。
+  - 命令已被 init 报告结束（`execution_->done`）时，`SignalTarget` 直接丢弃：此时再发 cancel 会打到**下一条**命令上。这是刻意的，不是漏改。
+  - 会话的 `grace` 取 `grace_ms + 5000`，让 init 自己的升级先走，core 不抢在它前面。
+- 命令结果直接来自 `core->result()`，`FinishCommand` 落盘后回包由 `SessionStore` 渲染；`outcome_of(facts)`/`finished_of(record)` 两个转换函数删除。
+- 顺带修好的两处类型缺口：`start_failed(reason, exec_errno, now)` 让 `exec_errno` 能进 `StartupFailed`（`sessions.py:87` 依赖它）；`StopIntent::session_closed` 现在产出 `Cancelled{cause=session_closed}`，不再是丢掉原因的裸 `Cancelled`。
+- 每条命令的 `metrics` 计算块删除：自从 4.1 把 per-command metrics 移出记录，它已经无处可去。
+
+### 4.5 清理 `CommandRecord` / `CommandFacts`（收尾，见 MIGRATION_SESSION 第 3 步）
 
 ## 5. 已经踩过的坑（别重犯）
 

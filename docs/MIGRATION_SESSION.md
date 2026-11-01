@@ -30,30 +30,14 @@ SDK 和测试，中间态不可编译，也无法分阶段验收。
 
 - 验收：`session_contract`、`session_store`、`sessions` 全绿；已跑 4 次稳定。
 
-### 第 2 步：`SessionController::handle` 换成类型化
+### 第 2 步：`SessionController::handle` 换成类型化 —— **已完成**
+### 第 3 步：`CommandRecord` / `CommandFacts` 换成 `core` 类型 —— **运行时已完成，类型删除待做**
 
-- 签名改为 `Json handle(const SessionRequest&)`（回包暂时仍是 JSON，见第 4 步）。
-- 用 `std::visit` 分派，逐个 op 从 `op.xxx` 取值，不再出现 `j.at("op")`。
-- 入口处调用 `session_request_from_json()`；解码失败直接返回错误回包，
-  不再把 `Json` 传进业务层。
-- 需要旧类型的地方（`resolve_command`、`CommandRecord`）先就地转换一次，
-  并在注释里标 `// transitional`。
-- 验收：全仓库编译 + 链接；`sessions.py` 未改动仍能过（它只依赖回包格式）。
+- 会话每条命令现在由 `ExecutionCore` 监督，结果直接是 `ExecutionResult`，`CommandRecord` / `CommandFacts` 已不参与运行时。
+- 剩下的是把它们从 `command_model.*` 与 `task_tests.cpp` 里删掉（`ExecuteRequest` / `CommandId` / `WriteStdinRequest` 仍在外层边界使用，整文件删除还做不到）。
+### 第 4 步：回包类型化 —— **未做，且建议先别做**
 
-### 第 3 步：`CommandRecord` / `CommandFacts` 换成 `core` 类型
-
-- `CommandRecord` → `core/record` 的 `FinishedCommand` + `core/result` 的 `ExecutionResult`。
-- `CommandFacts::parse(Json)` 删除；事实来自 `core/control` 的 `CommandDone`（已完成）。
-- `command_model.*`、`session_protocol.*` 中不再被引用的声明删除。
-- 验收：`session_contract`、`task_tests` 改写后通过；`command_model.*` 可整文件删除。
-
-### 第 4 步：回包类型化
-
-- 给 `SessionReply` 增加 `RawReply{Json}`，仅用于 `status`/`files` 这两个只读视图，
-  并在文档里说明它是边界例外。
-- 其余回包用已有类型（`Accepted`、`OutputChunk`、`ResultReply`…），
-  由 `session_reply_to_json()` 编码回原格式，保证 SDK 不变。
-- 验收：`tests/session_sdk_tests.py`、`tests/sessions.py` 不改仍通过。
+理由：可类型化的回包（`output` / `stdin` / `cancel`）收益很小；而 `status`、`files`、以及"正在运行的命令摘要"都携带 `metrics` 这类**可扩展观测 payload**，业务类型里没有它的位置，最后只能落成一个 `RawReply{Json}` 的边界例外。更值得做的是把 `SessionStore` 里那段"记录→旧回包形状"的渲染搬到 wire 层，让存储不再知道回包长什么样——那是独立的一小步。
 
 ### 第 5 步：SDK 跟进（可选）
 
