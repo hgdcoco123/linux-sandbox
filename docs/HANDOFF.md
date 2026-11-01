@@ -8,9 +8,9 @@
 |---|---|
 | 仓库 | `D:\cpp_project\linux-sandbox`（工作目录唯一权威） |
 | 提交 | `4d1c802`，工作区干净；本轮在 `ec5e441` 之后落了 7 个提交（见 §1.1） |
-| 测试 | **32/32 通过**，Linux 7.0 内核实机；每项改动后连跑 4 次稳定，最后一次还做了独立目录的全新构建（`build-clean`） |
-| 隔离验收 | 用户临时放开 `kernel.apparmor_restrict_unprivileged_userns` 后，`tools/delegated_run.py` 全绿（含 `isolated /input snapshot passed`），4.5s、status=0 |
-| 跳过项 | `isolation_integration`（无 cgroup 委派时的预期行为，不是失败） |
+| 测试 | **32/32 通过**（`b127f4c`，独立目录全新构建 0 error），每项改动后连跑 4–5 次稳定 |
+| 隔离验收 | 全绿过一次：`tools/delegated_run.py` 输出 `isolated integration passed` / `isolated /input snapshot passed` / `isolated batch smoke passed`，status=0。**那次是在 `7f9279d`（init 合并）之前**，之后未再跑 |
+| 跳过项 | 不放开 `kernel.apparmor_restrict_unprivileged_userns` 时 `isolation_integration` 会 skip，这是预期行为，**但 skip 等于没测** |
 
 ### 1.1 本轮（`ec5e441` 之后）的 7 个提交
 
@@ -89,10 +89,10 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 2 | 单次与会话共用一套执行核心 | **完成**。会话每条命令一个 `ExecutionCore`，结果直接是 `ExecutionResult`；`CommandRecord`/`CommandFacts` 不再参与运行时 |
 | 3 | outcome / output / cleanup 三分 | **完成**。`verdict` 与 `summary` 分开，清理失败走 125 而 `summary` 仍可 success |
 | 4 | 进程与 FD 所有权明确 | **完成**。17 种控制消息、`fd_contract`、收发两侧强制校验 |
-| 5 | 隔离准备步骤化 + 逆序回滚 | **完成**。`PrepareSequence`；策略身份进结果（见下） |
+| 5 | 隔离准备步骤化 + 逆序回滚 | **部分**。单次执行用 `PrepareSequence`；**会话准备仍是内联流程、无 journal**；策略身份已进结果，但策略本身仍是兼容型拒绝列表 |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
-| 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、容量/条目限制、`/input` 的 `snapshot_copy` 均已生效（默认仍是 `bind_readonly`，不再有兜底切换） |
+| 8 | workspace 与 runtime 边界 | **部分**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()` 已生效；**运行期 `/output` 没有字节/条目配额**（`/work`、`/tmp` 是内核强制的 tmpfs） |
 | 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
 | 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留；连续会话 100 条命令的 FD/子进程/内存增长有界 |
 

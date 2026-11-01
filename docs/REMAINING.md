@@ -78,9 +78,29 @@
 
 仍待做：
 
-- P7 批次接入执行核心（**范围判定**：批次属于多运行编排，不在"单沙箱内部"的范围里，所以本轮没做）
+- **运行期 workspace 配额（未实现，真实缺口）**：`admit()` 与 `WorkspacePolicy` 管的是**复制**
+  的预算；目标程序运行期间往 `/output`（会话 workspace 的绑定）写文件**没有任何强制限制**。
+  `/work`、`/tmp` 是 `size=limits.tmp_bytes` 的 tmpfs，由内核强制；`/output` 是宿主目录绑定，
+  大小与文件数都不受约束。两种可行做法见下面"运行期配额的两条路"。
+- **seccomp 的 runtime 专用策略（未实现）**：当前是 `SCMP_ACT_ALLOW` + 拒绝列表的兼容型策略，
+  结果里只记录了策略名与规则集版本。针对明确支持的 runtime 做经测试的 allowlist 是独立工程
+  （需要对该 runtime 的 syscall 集合做 profiling 并用隔离环境验收），不是重构能顺带完成的。
+- **会话准备仍不是 `PrepareSequence`**：单次执行的准备是步骤化 + 逆序回滚；会话的准备写在
+  `SessionController::run()` 里，失败时靠收尾代码清理，没有 journal，因此"失败到了哪一步、
+  撤销了哪些"无法从结果里读出来。
+- P7 批次接入执行核心（**已定为范围外**：批次属于多运行编排；做的话按"子运行落
+  `FinishedCommand` 记录、批次解码记录而非匹配 `summary` 字符串"的方式）
 - 隔离路径（`tools/delegated_run.py`）只在放开 `kernel.apparmor_restrict_unprivileged_userns`
-  的机器上跑得起来；最后一次全绿是在这次 init 合并**之前**，合并后未重跑
+  的机器上跑得起来；最后一次全绿是在 init 合并**之前**，合并后未重跑
+
+### 运行期配额的两条路
+
+| 方案 | 内容 | 代价 |
+|---|---|---|
+| A. tmpfs + 收尾导出 | `/output` 挂 `size=workspace.max_bytes,nr_inodes=max_entries` 的 tmpfs，由内核强制；命令/会话结束时由 init 把树拷回宿主绑定（复用同一套"拒绝符号链接/特殊文件/边读边校验"的复制语义） | 复制语义要在 in-namespace 侧可用；init 多一个收尾步骤；`keep_on_close`/导出仍以宿主副本为准 |
+| B. 宿主侧扫描兜底 | 监督循环里周期性统计 workspace 的字节与条目数，超预算即停止命令并把超限记进 `cleanup` 失败 | 不是硬配额：快速写入者可在两次采样之间超出（100ms 采样 ≈ 上百 MB 的过冲），且扫描有成本 |
+
+建议 A：只有它将"运行期配额"变成内核强制的事实，而不是报告里的近似值；B 可以作为 A 落地前的临时措施，但结论必须写明"这是过冲有界的近似，不是配额"。
 
 已决定不做（理由见 REDESIGN §4.1，不要重新论证）：
 

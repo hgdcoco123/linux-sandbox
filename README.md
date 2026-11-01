@@ -2,13 +2,19 @@
 
 ## 0.6 内部重构（进行中）
 
-按"把沙箱当作独立执行系统重新组织内部结构"的目标，正在替换旧的 JSON 转发层：
+按"把沙箱当作独立执行系统重新组织内部结构"的目标，旧的 JSON 转发层已基本替换：
 
-- `include/sandbox/core/` 是一层新的、不依赖 JSON 的业务内核：类型化 ID 与请求、
+- `include/sandbox/core/` 是一层不依赖 JSON 的业务内核：类型化 ID 与请求、
   结果三分（outcome / output / cleanup）、执行核心（事件进、动作出）、准备步骤与逆序回滚、
-  控制消息与 FD 契约、二进制编解码、workspace 边界。
-- 控制通道（launcher/init）已完全类型化，不再有 `Message{Json}`。
-- 单次执行（`run`）已接到新执行核心与准备序列上；会话与批次仍在旧模型上。
+  控制消息与 FD 契约、记录与其编解码、workspace 边界。
+- 控制通道（launcher/init）已完全类型化，不再有 `Message{Json}`；两种 PID 1 已合并成一份。
+- 单次执行与会话**都已接到同一个执行核心**上（会话每条命令一个 `ExecutionCore`）。
+- 会话持久化记录已类型化；请求在入口处一次性解成业务类型。
+- **仍是 JSON 的地方**（有意为之，见 [REDESIGN §4.1](docs/REDESIGN.md)）：协议回包、
+  配置文件、CLI 输出、持久化记录的编码。
+- **尚未完成**：批次仍是独立进程 + JSON 汇总；`/output` 没有运行期配额；
+  seccomp 仍是兼容型拒绝策略（只记录了名称与版本）。见
+  [剩余工作](docs/REMAINING.md)。
 
 **先读 [重构设计](docs/REDESIGN.md)、[剩余工作与验证边界](docs/REMAINING.md)，实机验收按 [验收手册](docs/ACCEPTANCE.md)；会话路径迁移的执行顺序见 [会话迁移步骤](docs/MIGRATION_SESSION.md)。**
 本机可复现的验证（可移植测试 + 交叉编译 + 链接）见 `tools/cross-verify.ps1`。

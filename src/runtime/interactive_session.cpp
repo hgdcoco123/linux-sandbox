@@ -22,18 +22,7 @@
 #include <unistd.h>
 namespace sandbox {
 namespace {
-// The session still accepts the legacy request type on its wire entry point; this
-// converts it once, so everything below works on the typed request.
-ExecutionRequest intent_of(const ExecuteRequest &request) {
-    std::optional<RequestKey> key;
-    if (request.request_id) {
-        key = RequestKey::parse(request.request_id->str());
-        if (!key)
-            throw SessionError("INVALID_REQUEST", "invalid request_id");
-    }
-    return ExecutionRequest::create(request.argv, request.cwd, request.env, request.timeout,
-                                    std::move(key));
-}
+
 OutputStats stats_of(const StreamReport &report) {
     OutputStats stats;
     stats.saved_bytes = report.saved;
@@ -229,8 +218,7 @@ class SessionController {
             launcher_->init_channel().send(Stop{});
         persist();
     }
-    Json start(const ExecuteRequest &request) {
-        const auto intent = intent_of(request);
+    Json start(const ExecutionRequest &intent) {
         if (auto existing = records_->replay(intent))
             return command_reply(*existing);
         lifecycle_.require_idle();
@@ -238,7 +226,7 @@ class SessionController {
             throw SessionError("COMMAND_LIMIT", "session command count limit 1024 reached");
         RunConfig command;
         try {
-            command = resolve_command(config_, request);
+            command = resolve_command(config_, intent);
         } catch (const SessionError &) {
             throw;
         } catch (const std::exception &e) {
@@ -281,16 +269,16 @@ class SessionController {
         }
         return current();
     }
-    Json write_stdin(const WriteStdinRequest &input) {
+    Json write_stdin(const CommandIndex &command, const std::string &bytes) {
         if (!execution_ || !execution_->accepted ||
-            execution_->accepted->index.str() != input.command_id.str())
+            execution_->accepted->index.str() != command.str())
             throw SessionError("COMMAND_NOT_ACTIVE", "command is no longer active");
         lifecycle_.require_running();
         if (!execution_->input.write)
             throw std::runtime_error("stdin is closed");
-        if (input.bytes.size() > 4096)
+        if (bytes.size() > max_stdin_chunk)
             throw std::runtime_error("stdin chunk exceeds 4096 bytes");
-        auto n = ::write(execution_->input.write.get(), input.bytes.data(), input.bytes.size());
+        auto n = ::write(execution_->input.write.get(), bytes.data(), bytes.size());
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) n = 0;
         if (n < 0) system_error("write command stdin");
         return {{"accepted_bytes", n}};
@@ -316,20 +304,9 @@ class SessionController {
                 } else if constexpr (std::is_same_v<T, RequestStatusQuery>) {
                     return command_reply(records_->request_status(value.key));
                 } else if constexpr (std::is_same_v<T, Execute>) {
-                    // Transitional: the storage layer still speaks the legacy
-                    // request type, so the typed request is converted once here.
-                    const auto &typed = value.request;
-                    std::optional<std::string> key;
-                    if (typed.key())
-                        key = typed.key()->str();
-                    std::optional<std::string> cwd;
-                    if (typed.cwd())
-                        cwd = typed.cwd()->string();
-                    std::optional<std::uint64_t> wall;
-                    if (typed.timeout())
-                        wall = static_cast<std::uint64_t>(typed.timeout()->count());
-                    return start(ExecuteRequest::from_fields(std::move(key), typed.argv(),
-                                                            std::move(cwd), typed.env(), wall));
+                    // The typed request goes straight through: no round trip through
+                    // the JSON-era request type.
+                    return start(value.request);
                 } else if constexpr (std::is_same_v<T, Close>) {
                     close("closed");
                     return {{"status", "accepted"}};
@@ -351,7 +328,7 @@ class SessionController {
                     return {{"status", "accepted"}, {"active", !current().is_null()}};
                 } else if constexpr (std::is_same_v<T, StdinWrite>) {
                     check_active(value.command);
-                    return write_stdin({CommandId::parse(value.command.str()), value.bytes});
+                    return write_stdin(value.command, value.bytes);
                 } else if constexpr (std::is_same_v<T, StdinClose>) {
                     check_active(value.command);
                     lifecycle_.require_running();
