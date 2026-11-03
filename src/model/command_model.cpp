@@ -1,4 +1,4 @@
-#include "sandbox/command_model.hpp"
+#include "sandbox/model/command_model.hpp"
 #include <limits>
 namespace sandbox {
 namespace {

@@ -1,5 +1,5 @@
-#include "sandbox/isolation.hpp"
-#include "sandbox/mount_source.hpp"
+#include "sandbox/isolation/isolation.hpp"
+#include "sandbox/isolation/mount_source.hpp"
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -42,6 +42,10 @@ void RootfsBuilder::build(const RunConfig &c, const fs::path &root) {
     }
     // Inherited source FDs still reference the parent's mount objects. Reopen in
     // this namespace, rejecting symlinks and checking the pinned inode identity.
+    // Every mount gets a descriptor whether or not it is bound: the numbers were
+    // handed over by the launcher in mount order, so skipping one would shift all
+    // the ones after it onto the wrong source.
+    const bool quota_output = !c.workspace_transfer.empty();
     std::vector<UniqueFd> local_sources;
     local_sources.push_back(reopen_mount_source(6, c.runtime_root));
     for (std::size_t i = 0; i < c.mounts.size(); ++i)
@@ -50,6 +54,12 @@ void RootfsBuilder::build(const RunConfig &c, const fs::path &root) {
     mount_call(runtime_source.c_str(), root, nullptr, MS_BIND);
     attributes(root, true, false);
     for (std::size_t i = 0; i < c.mounts.size(); ++i) {
+        // With a quota workspace the caller's /output directory is the export
+        // destination, not the workspace: binding it here would either be hidden by
+        // the tmpfs mounted below (leaving the caller's directory empty) or, if the
+        // order ever changed, silently remove the quota.
+        if (quota_output && c.mounts[i].target == "/output")
+            continue;
         auto target = root / c.mounts[i].target.substr(1);
         auto source = "/proc/self/fd/" + std::to_string(local_sources[i + 1].get());
         mount_call(source.c_str(), target, nullptr, MS_BIND);
@@ -66,19 +76,8 @@ void RootfsBuilder::build(const RunConfig &c, const fs::path &root) {
         auto quota = "size=" + std::to_string(c.workspace.max_bytes) +
                      ",nr_inodes=" + std::to_string(c.workspace.max_entries) + ",mode=0700";
         mount_call("tmpfs", root / "output", "tmpfs", MS_NOSUID | MS_NODEV, quota.c_str());
-        // The only host path visible here besides the runtime and /input: data
-        // crosses the boundary through it, in both directions, on request.
-        //
-        // The mountpoint has to be part of the runtime layout: everything here is
-        // already read-only, so creating it now would modify the runtime and fail.
-        auto transfer = root / "transfer";
-        struct stat existing{};
-        if (::lstat(transfer.c_str(), &existing) < 0 || !S_ISDIR(existing.st_mode))
-            throw std::runtime_error(
-                "runtime has no plain 'transfer' placeholder: regenerate it with "
-                "tools/make_runtime.py (the workspace mount needs a mountpoint)");
-        mount_call(c.workspace_transfer.c_str(), transfer, nullptr, MS_BIND);
-        attributes(transfer, false, true);
+        // The supervisor cannot see this tmpfs, so data crosses the boundary through
+        // a descriptor it hands over for the duration of the run (see transfer_*).
     }
     auto size = "size=" + std::to_string(c.limits.tmp_bytes) + ",mode=0700";
     for (auto name : {"work", "tmp"})

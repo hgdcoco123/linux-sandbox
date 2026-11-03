@@ -10,13 +10,13 @@
 | 模块 | 文件 | 职责和所有权 |
 | --- | --- | --- |
 | SessionController | src/runtime/interactive_session.cpp | 监督循环、会话状态、操作调度；拥有 launcher、cgroup、服务端和活动命令 |
-| CommandExecution | include/sandbox/command_execution.hpp | 一条命令的三个管道、两个输出捕获器、命令记录、采样基线和期限；准备完成才转移给控制器 |
-| SessionLifecycle | include/sandbox/session_state.hpp | 合法状态转换、idle/running 操作前置条件 |
+| CommandExecution | include/sandbox/runtime/command_execution.hpp | 一条命令的三个管道、两个输出捕获器、命令记录、采样基线和期限；准备完成才转移给控制器 |
+| SessionLifecycle | include/sandbox/runtime/session_state.hpp | 合法状态转换、idle/running 操作前置条件 |
 | WorkspaceService | src/storage/workspace_service.cpp | 会话工作区上传/清单/导出、受限清单响应；控制器检查 idle 和 isolated |
 | SessionStore | src/storage/session_store.cpp | 会话快照、执行意图、命令终态、请求去重、恢复、关闭后查询 |
 | RunStore | src/storage/run_store.cpp | 私有目录、进程锁、原子 JSON 写入、所有者证据、底层资源回收 |
-| 会话协议 | include/sandbox/session_protocol.hpp、src/runtime/session_protocol.cpp | v1/v2 请求校验、ID、结构化错误、本地 socket 客户端 |
-| 命令策略解析 | include/sandbox/session_policy.hpp | 在可信 RunConfig 的限制下解析命令请求 |
+| 会话协议 | include/sandbox/runtime/session_protocol.hpp、src/runtime/session_protocol.cpp | v1/v2 请求校验、ID、结构化错误、本地 socket 客户端 |
+| 命令策略解析 | include/sandbox/runtime/session_policy.hpp | 在可信 RunConfig 的限制下解析命令请求 |
 | 共享启动 | sdk/launch.py | CLI 包装器和 SDK 共用 systemd 委派参数、路径保护和启动方式选择 |
 
 P0/P1/P2/P3 进程结构没有改变。内部 launcher/init 控制协议与外部会话协议版本分开。

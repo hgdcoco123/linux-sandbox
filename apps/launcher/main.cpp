@@ -1,6 +1,6 @@
-﻿#include "sandbox/environment.hpp"
-#include "sandbox/isolation.hpp"
-#include "sandbox/protocol.hpp"
+#include "sandbox/platform/environment.hpp"
+#include "sandbox/isolation/isolation.hpp"
+#include "sandbox/runtime/protocol.hpp"
 #include <cerrno>
 #include <fcntl.h>
 #include <iostream>

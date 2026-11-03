@@ -1,7 +1,7 @@
-#include "sandbox/batch.hpp"
-#include "sandbox/event_loop.hpp"
-#include "sandbox/session_protocol.hpp"
-#include "sandbox/store.hpp"
+#include "sandbox/runtime/batch.hpp"
+#include "sandbox/platform/event_loop.hpp"
+#include "sandbox/runtime/session_protocol.hpp"
+#include "sandbox/storage/store.hpp"
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>

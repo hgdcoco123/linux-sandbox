@@ -1,4 +1,4 @@
-#include "sandbox/launcher.hpp"
+#include "sandbox/runtime/launcher.hpp"
 #include <cerrno>
 #include <fcntl.h>
 #include <spawn.h>
@@ -58,6 +58,7 @@ LauncherClient::LauncherClient(const RunConfig &c, const fs::path &executable, c
         sources.push_back(open_path(c.runtime_root, O_PATH | O_DIRECTORY));
         for (const auto &m : c.mounts)
             sources.push_back(open_path(m.source, O_PATH | O_DIRECTORY));
+
     }
     // Duplicate all inputs first: spawn dup2 actions must not overwrite later source FDs.
     std::vector<int> original{input, output, error, p.second.get(), spec.get(), i.second.get()};

@@ -132,7 +132,7 @@ launcher 步骤的撤销是 `LauncherClient::abort()`。
 
 ## 3.10 故障边界测试（P8）
 
-`tests/fault_tests.cpp` 不测正常路径，只测"必须被拒绝"的输入：
+`tests/unit/fault_tests.cpp` 不测正常路径，只测"必须被拒绝"的输入：
 
 | 边界 | 做法 |
 |---|---|

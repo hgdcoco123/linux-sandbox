@@ -2,14 +2,18 @@
 
 写给下一个接手的会话。读完这份就该知道：改到哪了、怎么验证、还剩什么、哪些坑已经踩过。
 
+> **接手上一个会话的直接任务**（单次执行/批量任务的 workspace 配额，决策 A）请看
+> `docs/HANDOFF_QUOTA.md`：那里面有现状、7 步实现清单、验收标准、这次踩过的坑和这套环境的
+> 工作流。本文档讲整体设计范围，不重复这些。
+
 ## 1. 现在的状态
 
 | 项 | 值 |
 |---|---|
 | 仓库 | `D:\cpp_project\linux-sandbox`（工作目录唯一权威） |
-| 提交 | `4d1c802`，工作区干净；本轮在 `ec5e441` 之后落了 7 个提交（见 §1.1） |
-| 测试 | **32/32 通过**（`b127f4c`，独立目录全新构建 0 error），每项改动后连跑 4–5 次稳定 |
-| 隔离验收 | **最新一次全绿**（`0674c26`，通过 `tools/isolated-accept.sh`）：六条成功行全部出现，含 `workspace quota, export and failure reporting passed`，服务 status=0，sysctl 按原值恢复。更早的 `7f9279d` 之前那轮已不再代表当前状态 |
+| 提交 | `4d1c802` 之后又落了会话配额与单次配额两组改动；工作副本在 `ed4758b` 之上实现决策 A（见 `HANDOFF_QUOTA.md`） |
+| 测试 | **33/33 通过**（`ctest --test-dir build`；`isolation_integration` 无委派时 skip，skip 不算通过） |
+| 隔离验收 | **本轮修复后全绿**（`bash tools/isolated-accept.sh`）：必检行全齐（含新增的 `single-run quota enforced and the partial tree was exported`、`a refused export is reported, not passed off as success`），`NOT EXECUTED` 为 0，服务 `code=exited/status=0`，sysctl 按原值恢复 |
 | 跳过项 | 不放开 `kernel.apparmor_restrict_unprivileged_userns` 时 `isolation_integration` 会 skip，这是预期行为，**但 skip 等于没测** |
 
 ### 1.1 本轮（`ec5e441` 之后）的 7 个提交
@@ -38,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File tools\portable-tests.ps1
 powershell -ExecutionPolicy Bypass -File tools\cross-verify.ps1 -Zig <zig.exe> -HostWork <work>
 ```
 
-`cross-verify.ps1` 做 8 段检查：9 套可移植测试 → profiles → CMake 源列表一致性 → 42 个 TU 编译 → 23 个测试 TU 编译 → 2 个二进制链接 → 23 个测试链接。**它不跑 CMake 的库边界链接**，所以像 "`sandbox_model` 没链接 `sandbox_core`" 这类错误它查不出来——那是第一次上真机才暴露的。
+`cross-verify.ps1`（需要 `-ZigHostWork <目录>`）做 8 段检查：9 套可移植测试 → profiles → CMake 源列表一致性 → 全部源 TU 编译 → 全部测试 TU 编译 → 2 个二进制链接 → 每个测试可执行文件各链接一次。**这里不写死数量**：加了测试就会变，写死只会让文档过期。**它不跑 CMake 的库边界链接**，所以像 "`sandbox_model` 没链接 `sandbox_core`" 这类错误它查不出来——那是第一次上真机才暴露的。
 
 ### 虚拟机侧（唯一有意义的验证）
 
@@ -92,9 +96,61 @@ bash verify.sh --clean      # 配置 + 构建 + ctest，输出直接在终端
 | 5 | 隔离准备步骤化 + 逆序回滚 | **部分**。单次与会话**都已接 `PrepareSequence`**（会话的失败原因与回滚失败分开记录）；策略身份已进结果，但策略本身仍是兼容型拒绝列表 |
 | 6 | 取消/超时/后代清理统一停止流程 | **完成**。停因唯一入口 + 停止阶梯 + 有界预算 |
 | 7 | 输出有界、语义清晰 | **完成**。EOF / 写入完成 / 落盘三件事分开 |
-| 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()`、**隔离会话语义下的 `/output` tmpfs 配额（会话累计，内核强制）**、`/transfer` 双向移交与三类结果分开报告均已生效 |
+| 8 | workspace 与 runtime 边界 | **完成**。`keep_on_close`、`/input` 的 `snapshot_copy`、复制路径的 `admit()`、**隔离模式下 `/output` 一律是 tmpfs 配额（会话累计；单次执行与批量任务在运行结束时一次性导出）**、`/transfer` 双向移交与三类结果分开报告均已生效 |
 | 9 | 持久化记录独立建模 | **完成**。`SessionStore` 接口只收 `AcceptedCommand` / `FinishedCommand`，落盘走 `core/record_json`；旧 v2 记录仍可读回；SDK 直读 `result.json` 时按记录格式映射 |
 | 10 | 围绕故障边界的测试 | **完成**。截断/损坏/乱序/超时/取消/后代残留；连续会话 100 条命令的 FD/子进程/内存增长有界 |
+
+## 3.5 语义澄清（静态评审后）
+
+- **命令终态只有一个来源：`ExecutionCore`**。控制器只喂事实（`stop intent`、`main exited`、
+  `descendants empty`、`output eof`、`output finished`、`tick`）并执行它给出的动作；它不自己
+  推导超时、取消或成功判定。
+- **导出期间的阻塞**：init 同步复制目录，复制期间控制通道响应变慢。监督端有等待上限
+  （默认 30s，`SBX_TRANSFER_WAIT_MS` 可调），超时后记 `TRANSFER_TIMEOUT`；此时复制可能仍在
+  进行，因此**通道在本会话内作废**，后续传输快速失败，直到会话关闭。迟到回执按序号丢弃：
+  等待期间由 `await_transfer()` 丢，等待放弃之后由主循环丢（记一条
+  `stale transfer reply discarded`）——**它绝不是"意外消息"**，把迟到回执当成协议错误会
+  杀掉一个健康的会话（本轮真机验收就踩到了）。同一时刻只允许一个在途传输。
+- **配额计量不是同一种量**：tmpfs 的 `size`/`nr_inodes` 是内核记账（含目录项与元数据），
+  `WorkspacePolicy.max_bytes/max_entries` 是复制层自己数的文件字节与条目数。tmpfs 占用
+  **宿主内存**，受 cgroup `memory.max` 约束：配额设得比内存上限大时，先撞的是内存限制。
+- **工作区持久性**：会话里命令结束**不自动导出**，只有 `manifest`/`export`/关闭时才移交；所以 init
+  异常退出最多丢失"上一次成功移交之后"的写入。单次执行（决策 A 之后）**在目标结束后、init 退出前
+  必定导出一次**，监督端会等到这次答案才收尾（上限默认 30s，`SBX_TRANSFER_WAIT_MS` 可调）；
+  导出失败或 init 在导出前死亡 → 结果里 `workspace.export.ok=false`、`verdict=harness_error`，
+  **不因为目标退出 0 就报成功**。`keep_on_close` 管的是宿主已发布副本。
+- **等导出不等于失去响应**：监督端在 `await_transfer()` 里等待沙箱复制时仍然看信号（SIGINT/SIGTERM）
+  和会话关闭期限，收到停止就把 `Stop{}` 转给 init（`InterruptOnStop` 会让复制以
+  `TransferAborted` 结束），并且**记住**这次停止，等等待退栈后由主循环 `close("signal")` 收尾。
+  所以"复制可被中断"现在从外部按 Ctrl-C 就能触发，而不是只有单元测试里注入回调才能看到。
+  客户端发起的第二次请求仍要等这次导出结束（服务是一问一答），这一点是协议边界，不是遗漏。
+- **原子可见 ≠ 持久化，而且这是两类事实**：`renameat2(RENAME_EXCHANGE)` 只保证交换瞬间可见。
+  `publish_tree_over()` 返回 `PublishResult{published, durability_confirmed, durability_error,
+  cleanup_error, retained_previous_path}`：
+  - 交换前失败 → 抛异常（什么都没发布）；
+  - 交换后 `fsync` 父目录失败 → `published=true`、`durability_confirmed=false`，并且**旧副本故意保留**
+    （它是唯一确定在盘上的版本，回收掉会让崩溃后两个版本都没了），**保留位置写进
+    `retained_previous_path`**——跨文件系统时那是生成的暂存目录名，调用方自己推不出来；
+  - 交换并确认持久、但旧副本回收失败 → `published=true`、`cleanup_error` 非空。
+  两个调用方各自记录这些事实：单次执行与会话都写进 `workspace.export.durable/durability_error/
+  retained_previous_path`，只有回收失败才进清理列表。**持久性未确认不算"未交付"**（产物是可见的），
+  也不改 `verdict`，但报告必须让人读得到；`ok` 只表示"当前可见"，不是断电持久性保证。
+- **安全策略强度**：`security.policy=baseline` 仍是兼容型拒绝列表，`security.policy/version`
+  只用于标识与可追溯，**不是强度声明**；补上配额不扩大这个承诺。
+
+### 3.6 三段"完成"：谁负责、谁读
+
+"完成"在这套代码里有三个不同的意思，混起来读会把收尾阶段的失败当成命令失败。
+`finished()` 的名字保留，但它只表示第一段。
+
+| 阶段 | 事实在哪 | 负责方 | 谁读它 |
+|---|---|---|---|
+| **命令监督**完成 | `ExecutionCore::finished()` / `Phase::finished` / `Completed{}` 动作（`apply()` 里是 no-op） | `ExecutionCore` | 控制器：停止喂事实，进入收尾 |
+| **环境收尾**完成 | launcher 已回收、cgroup 已删除、workspace 已交付或明确未交付 | 控制器的 `finalize()` / 会话收尾 | 报告：`cleanup`、`workspace.export` |
+| **记录落盘**完成 | `result.json`（单次执行）/ 会话记录已写 | 控制器（`store_->report` / `records_->close`） | 调用方：CLI、SDK、批次 |
+
+三条边界因此各有归属：核心判定目标结局，控制器判定环境是否收干净，报告层只做适配。
+报告里的 `summary`（目标做了什么）/ `verdict`（环境可不可信）/ 退出码就是按这三段分的。
 
 ## 4. 剩余工作（按建议顺序）
 
@@ -175,7 +231,7 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - `sandbox_model` 必须链接 `sandbox_core`（`config.cpp` 调用 `WorkspacePolicy::validate()` 等）。`cross-verify.ps1` 查不出来，因为它是全对象一起链接
 - 往 CMakeLists 插入块时注意结尾换行，否则 `endforeach()` 会和下一条命令粘成一行，`cmake` 直接 parse error
 - 仓库必须保持 LF：`core.autocrlf=false`，脚本 CRLF 会导致 `bash` 报奇怪的错
-- **磁盘上有 12 个文件是 CRLF、索引里是 LF，而 `git status` 报干净**（索引 stat 缓存挡住了，`git ls-files --eol` 显示 `w/crlf`）。改动它们之后直接 `git add` 会把 CRLF 写进 blob，静默破坏上面那条 LF 纪律。名单：`include/sandbox/store.hpp`、`src/storage/run_store.cpp`、`src/runtime/session_protocol.cpp`、`src/application/service.cpp`、`src/platform/environment.cpp`、`sdk/sandbox_client.py`、`sdk/session_client.py`、`third_party/spdlog/{INSTALL,LICENSE,README.md,.gitignore,cmake/spdlogConfig.cmake.in}`。判别方法：`git hash-object <file>` 与 `git ls-files -s <file>` 的 blob 不一致而 `git status` 干净。提交前先 `-replace "\r\n","\n"` 归一，`git diff` 就只剩真实改动
+- **磁盘上有 12 个文件是 CRLF、索引里是 LF，而 `git status` 报干净**（索引 stat 缓存挡住了，`git ls-files --eol` 显示 `w/crlf`）。改动它们之后直接 `git add` 会把 CRLF 写进 blob，静默破坏上面那条 LF 纪律。名单：`include/sandbox/storage/store.hpp`、`src/storage/run_store.cpp`、`src/runtime/session_protocol.cpp`、`src/application/service.cpp`、`src/platform/environment.cpp`、`sdk/sandbox_client.py`、`sdk/session_client.py`、`third_party/spdlog/{INSTALL,LICENSE,README.md,.gitignore,cmake/spdlogConfig.cmake.in}`。判别方法：`git hash-object <file>` 与 `git ls-files -s <file>` 的 blob 不一致而 `git status` 干净。提交前先 `-replace "\r\n","\n"` 归一，`git diff` 就只剩真实改动
 
 ### 存储
 
@@ -197,6 +253,14 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 - gdb 附加被 `yama/ptrace_scope=1` 挡住（不是 root），trace 是更可行的路
 - 虚拟机 `isolation.tools.hgfs.disable = "TRUE"`，共享目录不可用；主机非管理员，开不了防火墙入站端口。所以通道是"虚拟机当服务端、主机连它"
 
+- **`systemd-run` 不继承调用者的环境**：`export FOO=x; systemd-run --user ...` 里 `FOO` 是**不存在**的。
+  要把目录/开关传给单元里的进程，必须用参数显式带进去（本仓库走 `delegated_run.py --artifacts`），
+  或者 `-E`。我第一次写"失败会保留会话现场"时没验证这条，结果那行日志指向一个从未创建的目录。
+- **"1ms 超时"不是确定性测试**：复制快时根本不会超时。要测超时路径，让预算取 **0**（"完全不给时间"），
+  否则用例是抛硬币。同理，任何依赖"拷贝足够慢"的断言都不可信。
+- **能力在 fork 之前就丢了**：`prepare_environment()` 里 `drop_capabilities()` 之后，目标子进程没有
+  `CAP_SYS_ADMIN`，任何"给目标建独立 mount namespace 再遮蔽某个路径"的方案都会 EPERM 失败。
+  想让目标看不到某个目录，正确做法是**根本不要让它出现在文件系统里**（fd + `*at`），而不是遮挡。
 ## 6. 关键代码位置
 
 | 关注点 | 文件 |
@@ -218,7 +282,7 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 1. 这个字段还有谁在读？
 2. 我写的这个覆盖，在它想覆盖的那行之后吗？
 
-绿基线比新功能重要。任何一步把 32/32 弄红的改动，都应该当场回退，而不是"再改改就好了"。
+绿基线比新问题重要。任何一步把 33/33 弄红的改动，都应该当场回退，而不是"再改改就好了"。
 
 ### 4.6 syscall 策略身份进执行结果（已完成）
 
@@ -227,3 +291,129 @@ cmd-N/result.json    encode(FinishedCommand)   index / result{outcome,stdout,std
 "baseline" 并不代表可比。空 name 表示没有装过滤器（与"装了默认策略"不是一回事）。
 落盘进 `result.security`，单次执行的报告里也有一份；会话回包没有这个字段，因为
 `proto/session_v1.proto` 里没有位置，加它要重生成 Python pb2。
+
+### 4.7 单次执行与批量的 `/output` 配额（决策 A，已完成）
+
+语义：隔离模式下 `/output` **一律**是沙箱 namespace 里的 tmpfs（`size=workspace.max_bytes`、
+`nr_inodes=workspace.max_entries`），`mounts[target=/output].source` 从"工作区本身"变成
+**运行结束时最后一次导出落地的宿主目录**。批量任务的子进程就是 `sandbox run`，因此自动继承；
+批次按子运行的 `verdict` 判定，所以"产物未交付"会让任务失败。
+
+接线（一处发送，一处接收，和会话同一套消息）：
+
+| 位置 | 做什么 |
+|---|---|
+| `src/runtime/run_session.cpp::prepare()` | 有 `/output` 挂载时：把 source 记成导出目的地、把它**从 `config_.mounts` 移除**、建 `<run>/transfer` 与 `transfer/in`（`PrepareStep::state_root`，可回滚）、置 `config_.workspace_transfer` |
+| `run_session::on_launcher`（`InitCreated`） | 发完 `Prepare{}` 后**以 fd 发** `TransferChannel{}`，宿主目录在沙箱里没有路径 |
+| `src/runtime/init.cpp::run_once` | `prepare_environment` 之后、`EnvReady` 之前收 fd；`supervise_command` 返回后（且**确实 exec 过**）`export_workspace(fd,"final")` → `Transferred` → `InitDone` |
+| `run_session::on_init`（`Transferred`） | 记 `report_.workspace`，`renameat2(RENAME_EXCHANGE)` 把 `transfer/final` 与宿主目的地交换（跨文件系统时先拷到目的地同盘再交换），旧副本交换后才回收 |
+| `run_session::supervise()` | 目标结局已定但导出未答：**不结束**，等到答案或 30s 预算（`SBX_TRANSFER_WAIT_MS`），否则报告"未交付" |
+| `run_session::finalize()` | `attempted && !ok` → `errors` + `summary` 不再是 `success` + `verdict=harness_error`（`cleanup_incomplete` 优先） |
+
+报告形状（`result.json`，**报告 schema_version 从 1 升到 2**；命令记录仍是
+`record_schema_version = 4`，记录形状没变）：
+
+```json
+"workspace": {
+  "mode": "tmpfs",
+  "quota": {"max_bytes": 65536, "max_entries": 4096},
+  "export": {"attempted": true, "ok": true, "bytes": 10, "entries": 1, "error": "",
+             "durable": true, "durability_error": "",
+             "retained_previous_path": ""}
+}
+```
+
+`export` 是**三个独立事实**，不是一个布尔：`ok` = 新树已经在宿主目的地可见（**只是可见，不是断电持久**）；
+`durable` = 这次可见已经落盘；`error` = 根本没交付成功。`durable=false` 时旧副本被保留在
+`retained_previous_path`（宿主路径，通常在 `<run>/transfer/` 下），崩溃后可能回到它。
+回收旧副本失败只进 `cleanup.errors`，不会伪装成交付失败。
+
+没有 `/output` 目的地的运行（process 模式，或隔离但没有 `/output` 挂载）写作 `null`：
+读侧必须把"没有这个字段/为 null"当成**未知**，不能当成"什么都没写"。
+`attempted` 只在**目标确实 exec 过**之后才为真：启动失败或准备失败没有产物可交，不该报未交付。
+
+失败用例怎么造：`tests/acceptance/isolation.py` 用 fixture 的 `link-output` 在 `/output` 里放一个符号链接
+（导出策略拒绝符号链接），目标本身退出 0 —— 这样"目标成功但产物未交付"是确定性的失败，
+不依赖改宿主权限或刚好撞上磁盘满。配额用例用同一个 `fill-bytes` 探针，超预算必须拿到 `60`。
+
+**第一次上真机踩到的两个坑（都已修，别退回）**：
+
+1. **init 带着未读帧关闭控制通道 → 对端 `ECONNRESET`，已发出的回执被内核丢弃**。目标退出后
+   监督端会发一个 `Stop`（`main_exited` 的 `SignalTarget`），而 init 这时已经在导出、不再读通道；
+   init 关闭 socket 时 `Stop` 还排在它的接收队列里。Linux 的 AF_UNIX 在这种情况下会给对端
+   `ECONNRESET` **并且丢掉对端接收队列里已有的帧**（socketpair 最小复现：
+   `['ERR:Connection reset by peer']`，先抽干再关则是 `['A','B','EOF']`）。现象就是"目标成功、
+   导出其实已落盘、报告却说未交付"。
+   两层修法：init 在发回执前和发完后都 `discard_pending()` 抽干通道；监督端不只信消息——
+   `<run>/transfer/final` 已经在盘上就 `adopt_landed_export()` 直接采用并原子发布
+   （导出是先 `renameat2` 再回执，所以盘上的树比消息更可信）。
+2. **OOM group kill 会把 init 一起杀掉**（实测 `oom_kill=3`、`oom_group_kill=1`）：namespace 里的
+   tmpfs 随 init 一起消失，产物**真的**交付不了。这不算 bug，报告必须写"未交付"
+   （`workspace.export.ok=false` + `errors`），`summary` 仍是 `oom`、`verdict=harness_error`。
+   所以 `tests/acceptance/isolation.py` 的 OOM 用例是 `export_ok=None`（两种结果都接受，但都要求有据可依），
+   其余用例仍强制 `ok=True`。别把这条改成"OOM 也必须交付"。
+
+### 4.8 静态评审后的四项收尾（已完成）
+
+| 项 | 内容 |
+|---|---|
+| 等待传输期间的响应性 | `await_transfer()` 每轮先看信号：收到 SIGINT/SIGTERM 就把 `Stop{}` 转给 init（复制以 `TransferAborted` 结束），并置 `signal_pending_` 让主循环仍能 `close("signal")`；同时检查关闭期限。**红线**：不能在这里 `server_->serve()`——`sync_workspace` 会在 `handle()` 内部被调用，递归服务会坏。客户端发起的第二次请求仍等这次导出结束，这是协议边界 |
+| 端到端停止用例 | `tests/acceptance/workspace_quota.py` 第 6 条：15000 个条目、导出在后台线程、100ms 后给沙箱进程发 SIGINT，断言 5s 内结束、`stop_reason=signal`、导出报 `TRANSFER_INTERRUPTED`。必需行已进 `isolated-accept.sh` |
+| 类型化停止原因 | `Transferred` 增加 `TransferStop{none,interrupted}`，`init` 捕获 `TransferAborted` 填它；`interactive_session` 不再用 `error.find("interrupted by a stop request")` 猜类型 |
+| 发布逻辑去重 | 两个调用点合并成 `publish_tree_over()`（`src/storage/artifacts.cpp`）：交换（跨文件系统时先拷到同盘再交换）→ `fsync` 两侧父目录 → 回收旧副本 |
+| 发布结果三分 | 返回值改为 `PublishResult{published, durability_confirmed, durability_error, cleanup_error, retained_previous_path}`：交换前失败抛异常；交换后持久性失败**保留旧副本**、把保留位置一起返回；回收失败是单独的第三类。两个调用方都写进 `workspace.export.durable/durability_error/retained_previous_path`，不再把持久性失败塞进清理列表。`ok` 只表示"当前可见" |
+| 发布测试的覆盖范围 | `publish_tests.cpp` 覆盖：交换成功、目标缺失抛异常、持久性未确认、回收失败；跨文件系统（`/dev/shm` 与 `/tmp` 不同设备时才执行）。**持久性未确认是用"父目录不可读"制造的**（交换只需写+执行，同步需要读），不是模拟 `fsync()` 返回 I/O 错误；内核级 I/O 错误路径、以及跨文件系统分支里的那次提前返回都没有被覆盖。为了让"通过 ≠ 跑过"可核对，`publish_tests` 会打印**明确的一行**：`cross-filesystem publish: exercised (...)` 或 `... NOT exercised (...)`，`ACCEPTANCE` §2/§7 要求验收记录把这行抄下来 |
+| 验收脚本的信号 | `isolated-accept.sh` 的恢复只挂 `EXIT`，INT/TERM 改为 `exit 130/143`；此前信号到达后脚本会带着已恢复的 sysctl 继续跑 |
+
+一处仍然保留的有意取舍：`init` 的单次执行导出**不轮询控制通道**（回调传空），超时由监督端的
+预算兜底；会话路径才在等待期间处理信号。两者语义不同是因为单次执行没有"后续命令"要保护。
+
+### 4.9 接口与异常安全收紧（已完成，设计评审第三轮）
+
+| 项 | 内容 |
+|---|---|
+| 结果只读 | 删掉 `ExecutionCore::result()` 的非 const 重载；写入口只剩 `mark_launcher_reaped` / `mark_cgroup_removed` / `mark_workspace_removed` / `add_cleanup_failure` / `set_security`。"结果由状态机形成"因此是编译期事实，不是纪律 |
+| 准备步骤契约 | 写进 `prepare.hpp`：`apply` 必须异常安全（框架只 undo 已完成的步骤）；`undo` 可假定 `apply` 返回过。**允许的残留**限定为运行目录内的诊断文件（`stdout.bin` / `stderr.bin` / `internal.log` / `state.json` / `config.json` / `control.sock` / 半成品 `transfer/`、`input/`）；**绝不允许**留下 cgroup、挂载、进程、运行目录之外的套接字或目录 |
+| 目录事务 | `create_directories_or_remove()`（`src/platform/linux.cpp`）：只回收**本次成功创建**的目录、预存目录复用不删、逆序 `rmdir`（不递归）、保留原始失败原因并在后面追加回滚删除失败的诊断。两个 `state_root` 步骤与 `create_transfer_layout()` 都改用它。`output_capture` 核对结论：FD 由 RAII 关闭，已创建的 `stdout.bin`/`stderr.bin` 属于允许的诊断残留，不算泄漏 |
+| 撤销不短路 | `remove_all_collect()`（同文件）：逐个尝试删除、收集全部失败后一次性报告。会话 `state_root`（`rootfs_` / `workspace` / `transfer_`）与 `input_snapshot` 的 undo 改用它——此前第一个删除失败就抛，后面的目录根本不会被尝试，与 `PrepareSequence`"一次回滚失败不阻断其他回滚"的规则不一致 |
+| 完成语义 | 见 §3.6 的三段划分；`finished()` 名字保留 |
+
+测试覆盖（`tests/integration/publish_tests.cpp`）：目录事务的三段场景（自建目录被删、预存目录保留、预存文件保留、错误信息带原始原因）+ **真实调用路径** `create_transfer_layout()`（占用 inbox 时失败且不动预存目录、全新目录可创建、重复调用幂等）+ `remove_all_collect()`（一个删不掉时其余仍然被尝试、失败信息带路径）。会话 `state_root` 的 undo 本身由 ctest 的 `session_prepare` 覆盖（它注入 launcher 步骤失败并要求前面的步骤被撤销）。
+**没有覆盖的**：`rmdir` 回滚本身失败的诊断分支——那需要让一个刚创建的空目录在回滚前变成非空，测试进程控制不到，代码里保留但不谎称测过。
+
+### 4.10 迟到回执不是协议错误（真机验收发现，已修）
+
+`tests/acceptance/workspace_quota.py` 的"超时后通道作废"用例在真机上红过一次：第二次 `export` 没有拿到
+`TRANSFER_UNUSABLE`，而是会话已经死了。根因是**等待放弃之后没人再按序号丢弃迟到回执**——
+
+- `await_transfer()` 内部有 stale-reply 处理，但它在超时那一刻就抛出了；
+- 复制仍在沙箱里跑，几毫秒后那条 `Transferred` 到了，被主循环的 `drain_channels()` 读走；
+- 会话的消息分派只认 `EnvReady` / `CommandDone` / `InitError` / `InitDone`，**没有 `Transferred`**，
+  于是按"意外消息"抛出，把一个健康会话判成 `host_error`。
+
+修法：主循环把 `Transferred` 当成迟到的回执丢掉，并记一条
+`stale transfer reply discarded (sequence N)`（与 `await_transfer()` 里同一个标志，只记一次）。
+用例里补了回归断言：超时 → 等 0.5s 让迟到回执真的到达 → 会话仍能执行命令。
+
+顺带修了 `workspace_quota.py` 的失败现场保留：它把会话状态根放在 `TemporaryDirectory` 里，而
+`sys.excepthook` 在临时目录清理**之后**才跑，所以以前只打印"kept session state"却什么都没留下。
+现在状态根在临时目录之外，失败时真能拿到 `result.json`。
+
+**同一类问题在会话关闭路径上还有一份**（下一轮真机验收抓到）：`close("signal")` 也会给 init 发一个
+`Stop`，而 init 这时已经发完 `INIT_DONE` 正在退出；它带着未读的 `Stop` 关闭 socket，内核给监督端
+`ECONNRESET` 并丢掉还在队列里的 `INIT_DONE`。监督端于是走到 `drain_channels()` 的
+`if (!(parent ? reaped_ : done_)) throw;`，把**一次主动关闭**报成 `host_error`——`stop_reason`
+从正确的 `signal` 被覆盖成 `host_error`，`errors` 里只有一句 "control channel closed"。
+两处修法，和单次执行那次完全对称：
+
+1. `init` 在被打断的导出路径上发完 `INIT_DONE` 之后也 `discard_pending()`，先吃掉那个迟到的 `Stop`；
+2. 监督端在 `stopping()` 期间接受"通道先于 `INIT_DONE` 关闭"：通道关闭**结束证据**，不算失败
+   （把 `done_` 置真）；不在停止期间关闭仍然照旧判错。
+
+顺带补齐了两件诊断缺口：
+
+- **会话现在也写 `internal.log`**（`<run>/internal.log`，与单次执行同一个文件、同一套等级规则），
+  记录每个控制事件的种类与方向、通道关闭时的 `reaped/done/stopping/quarantined` 标志、`close(reason)`、
+  信号与导出结果。此前会话只留一个 `result.json`，判断"哪个通道先关"只能靠猜。
+- **`execution_ms` 单位错**：`session_wire` 把微秒直接写进毫秒字段，83 ms 的命令报成 `83000`。
+  现在按毫秒截断。

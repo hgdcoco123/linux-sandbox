@@ -13,6 +13,8 @@ group = p.add_mutually_exclusive_group(required=True)
 group.add_argument("--config", type=Path)
 group.add_argument("--test-runtime", type=Path)
 p.add_argument("--state-root", type=Path)
+p.add_argument("--artifacts", type=Path,
+               help="directory that failing cases copy their session state into")
 p.add_argument("--session", action="store_true", help="force persistent session startup")
 p.add_argument("--batch", action="store_true")
 a = p.parse_args()
@@ -61,7 +63,11 @@ runs.mkdir()
 binary = str(a.sandbox.resolve())
 if a.test_runtime:
     env = dict(os.environ, SANDBOX_TEST_RUNTIME=str(a.test_runtime.resolve()), SANDBOX_TEST_CGROUP=str(runs))
-    for test in ("isolation.py", "sessions.py", "workspace_quota.py", "batch_integration.py"):
+    # The cases copy their state here when they fail; passing the flag without this
+    # export is what makes a red run need a second round trip to diagnose.
+    if a.artifacts:
+        env["SBX_TEST_ARTIFACTS"] = str(a.artifacts.resolve())
+    for test in ("acceptance/isolation.py", "integration/sessions.py", "acceptance/workspace_quota.py", "integration/batch_integration.py"):
         code = subprocess.call([sys.executable, str(Path(__file__).resolve().parents[1] / "tests" / test), binary], env=env)
         if code:
             raise SystemExit(code)

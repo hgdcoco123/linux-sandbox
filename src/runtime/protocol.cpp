@@ -1,4 +1,4 @@
-#include "sandbox/protocol.hpp"
+#include "sandbox/runtime/protocol.hpp"
 #include <cerrno>
 #include <cstring>
 #include <sys/socket.h>

@@ -1,11 +1,15 @@
 #include "sandbox/core/prepare.hpp"
 #include "sandbox/core/supervisor.hpp"
-#include "sandbox/event_loop.hpp"
-#include "sandbox/isolation.hpp"
-#include "sandbox/session.hpp"
-#include "sandbox/snapshot.hpp"
+#include "sandbox/platform/event_loop.hpp"
+#include "sandbox/storage/artifacts.hpp"
+#include "sandbox/isolation/isolation.hpp"
+#include "sandbox/runtime/session.hpp"
+#include "sandbox/storage/snapshot.hpp"
+#include <cstring>
+#include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
+#include <limits>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <sys/stat.h>
@@ -48,16 +52,7 @@ SupervisionLimits core_limits(const RunConfig &config) {
     return core;
 }
 
-OutputStats stats_of(const StreamReport &report) {
-    OutputStats stats;
-    stats.saved_bytes = report.saved;
-    stats.discarded_bytes = report.discarded;
-    stats.failed_bytes = report.failed_bytes;
-    stats.queue_peak_bytes = report.queue_peak_bytes;
-    stats.backpressure_events = report.backpressure_events;
-    stats.write_error = report.write_error;
-    return stats;
-}
+
 
 // The report keeps the field's established vocabulary: a natural exit leaves
 // stop_reason empty (exit_code/signal already say what happened), and only an
@@ -146,7 +141,7 @@ void RunSession::prepare() {
     core_ = std::make_unique<ExecutionCore>(core_limits(config_), now_ms());
     // Which syscall policy this run executes under is a fact about the result, not
     // something a reader should have to infer from the configuration file.
-    core_->result().security = security_policy_id(config_);
+    core_->set_security(security_policy_id(config_));
     store_ = RunStore::create(state_root_, config_);
     report_.id = store_->id();
     report_.isolated = config_.mode == "isolated";
@@ -160,9 +155,54 @@ void RunSession::prepare() {
     logger_->info("run directory: {}", store_->directory().string());
     auto root = store_->directory() / "rootfs";
     checked(::mkdir(root.c_str(), 0700), "create root mountpoint");
+    // Decision A, and the reason this is done after the store was created: in
+    // isolated mode /output belongs to the sandbox. The caller's directory stops
+    // being the workspace and becomes the place the final export lands, so the mount
+    // entry is taken out of the effective configuration (config.json keeps the
+    // caller's request) and the directory is handed to init as a descriptor instead.
+    if (config_.mode == "isolated") {
+        for (auto mount = config_.mounts.begin(); mount != config_.mounts.end(); ++mount) {
+            if (mount->target != "/output")
+                continue;
+            output_destination_ = mount->source;
+            config_.mounts.erase(mount);
+            break;
+        }
+        if (!output_destination_.empty()) {
+            quota_workspace_ = true;
+            transfer_ = store_->directory() / "transfer";
+            config_.workspace_transfer = transfer_;
+            record_workspace_export(false, false, 0, 0, "");
+            // The supervising side waits for the export after the target is gone;
+            // the same knob the session uses bounds that wait.
+            if (const char *configured = ::getenv("SBX_TRANSFER_WAIT_MS")) {
+                char *end = nullptr;
+                const auto value = std::strtoull(configured, &end, 10);
+                if (end && *end == '\0' && end != configured)
+                    workspace_budget_ms_ = value;
+            }
+            logger_->info("workspace: tmpfs quota, export destination {}",
+                          output_destination_.string());
+        }
+    }
     // The state directory is deliberately not undone: the report lives there even
     // when preparation fails. Everything else is journaled and rolled back.
     std::vector<PrepareStepSpec> steps;
+    steps.push_back({PrepareStep::state_root,
+                     [this] {
+                         if (!quota_workspace_)
+                             return;
+                         // One transaction: a failure here removes only what it created.
+                         create_transfer_layout(store_->directory());
+                     },
+                     [this] {
+                         if (transfer_.empty())
+                             return;
+                         std::error_code failure;
+                         fs::remove_all(transfer_, failure);
+                         if (failure)
+                             report_.cleanup_errors.push_back("transfer: " + failure.message());
+                     }});
     steps.push_back({PrepareStep::control_socket,
                      [this] {
                          control_ = std::make_unique<ControlServer>(store_->directory() /
@@ -348,6 +388,16 @@ void RunSession::on_launcher(ControlEnvelope message) {
         }
         const bool stopping = core_->phase() == Phase::stopping || core_->finished();
         launcher_->init_channel().send(stopping ? ControlMessage{Stop{}} : ControlMessage{Prepare{}});
+        // The workspace transfer directory goes over as a descriptor, not a mount and
+        // not a path: init can copy through it without the target being able to name
+        // it. It follows PREPARE because that is the order init expects.
+        if (!stopping && quota_workspace_) {
+            int transfer =
+                checked(::open(transfer_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC),
+                        "open transfer directory");
+            launcher_->init_channel().send(TransferChannel{}, transfer);
+            ::close(transfer);
+        }
         logger_->info("init created and resources attached, pid={}", pid);
     } else if (auto *reaped = std::get_if<InitReaped>(&message.message)) {
         if (!init_created_ || init_reaped_)
@@ -363,6 +413,8 @@ void RunSession::on_launcher(ControlEnvelope message) {
 
 void RunSession::on_init(ControlEnvelope message) {
     const Millis now = now_ms();
+    if (logger_)
+        logger_->info("init event: {}", control_kind_name(kind_of(message.message)));
     if (std::holds_alternative<EnvReady>(message.message)) {
         if (!init_created_ || env_ready_)
             throw std::runtime_error("unexpected ENV_READY");
@@ -377,7 +429,30 @@ void RunSession::on_init(ControlEnvelope message) {
         if (!env_ready_ || report_.exec_observed)
             throw std::runtime_error("unexpected exec observation");
         report_.exec_observed = true;
+        // The target ran, so the artifacts are now owed. A run that never reached
+        // exec has none, and init deliberately does not export in that case.
+        if (quota_workspace_)
+            record_workspace_export(true, false, 0, 0, "");
         apply(core_->exec_observed(now));
+    } else if (auto *exported = std::get_if<Transferred>(&message.message)) {
+        if (!quota_workspace_ || workspace_answered_)
+            throw std::runtime_error("unexpected workspace export answer");
+        workspace_answered_ = true;
+        // "attempted" is a fact about the run, not about the sandbox's answer: a run
+        // that never reached exec had nothing to hand over, and init says so.
+        record_workspace_export(report_.exec_observed, exported->ok, exported->bytes,
+                                exported->entries, exported->error);
+        if (logger_)
+            logger_->info("workspace export answer: ok={} bytes={} entries={} error={}",
+                          exported->ok, exported->bytes, exported->entries, exported->error);
+        if (!exported->ok)
+            return; // there is nothing on disk to publish; the report says why
+        try {
+            publish_workspace(exported->entries, exported->bytes);
+        } catch (const std::exception &failure) {
+            record_workspace_export(true, false, exported->bytes, exported->entries,
+                                    std::string("publish: ") + failure.what());
+        }
     } else if (auto *failed = std::get_if<StartFailed>(&message.message)) {
         report_.exec_error =
             "stage=" + std::to_string(failed->stage) + ", errno=" + std::to_string(failed->error);
@@ -530,8 +605,100 @@ void RunSession::supervise(SignalSource &signals) {
         } else {
             stop_started_ = Millis{0};
         }
-        if (core_->finished())
+        if (core_->finished() && !workspace_pending())
             break;
+        // The target result is sealed, but the artifacts are still inside a tmpfs that
+        // dies with the namespace. Ending supervision now would kill init mid-copy
+        // and lose them, so the answer is awaited - bounded, because "not delivered"
+        // is a reportable result and silence is not one.
+        if (core_->finished()) {
+            if (!workspace_wait_seen_) {
+                workspace_wait_seen_ = true;
+                workspace_wait_started_ = now;
+            } else if ((now - workspace_wait_started_).count() >
+                       static_cast<std::int64_t>(workspace_budget_ms_)) {
+                report_.errors.push_back("workspace export did not answer within " +
+                                         std::to_string(workspace_budget_ms_) + "ms");
+                logger_->warn("workspace export did not answer within {}ms", workspace_budget_ms_);
+                break;
+            }
+        }
+    }
+}
+
+void RunSession::record_workspace_export(bool attempted, bool ok, std::uint64_t bytes,
+                                         std::uint32_t entries, const std::string &error) {
+    report_.workspace = Json{{"mode", "tmpfs"},
+                             {"quota",
+                              {{"max_bytes", config_.workspace.max_bytes},
+                               {"max_entries", config_.workspace.max_entries}}},
+                             {"export",
+                              {{"attempted", attempted},
+                               {"ok", ok},
+                               {"bytes", bytes},
+                               {"entries", entries},
+                               {"error", error},
+                               // Only meaningful once ok is true: whether the visible
+                               // tree is also on stable storage.
+                               {"durable", false},
+                               {"durability_error", ""},
+                               // Where the previous copy was kept when durability could
+                               // not be confirmed (empty when nothing was retained).
+                               {"retained_previous_path", ""}}}};
+}
+
+bool RunSession::adopt_landed_export() {
+    if (!quota_workspace_ || workspace_answered_ || !report_.exec_observed)
+        return false;
+    auto landed = transfer_ / "final";
+    std::error_code failure;
+    if (!fs::is_directory(landed, failure))
+        return false; // nothing landed: the copy never completed
+    // init publishes the tree with renameat2 and only then answers, so a tree in the
+    // transfer directory is a completed export even when its answer was lost.
+    std::uint64_t bytes = 0;
+    std::uint32_t entries = 0;
+    for (auto it = fs::recursive_directory_iterator(landed, failure);
+         !failure && it != fs::recursive_directory_iterator(); it.increment(failure)) {
+        if (entries == std::numeric_limits<std::uint32_t>::max())
+            break;
+        ++entries;
+        std::error_code size_failure;
+        if (it->is_regular_file(size_failure))
+            bytes += it->file_size(size_failure);
+    }
+    if (failure)
+        return false;
+    workspace_answered_ = true;
+    if (logger_)
+        logger_->warn("workspace export answer was lost; adopting the tree that landed on disk");
+    record_workspace_export(true, true, bytes, entries, "");
+    try {
+        publish_workspace(entries, bytes);
+    } catch (const std::exception &e) {
+        record_workspace_export(true, false, bytes, entries, std::string("publish: ") + e.what());
+    }
+    return true;
+}
+
+void RunSession::publish_workspace(std::uint32_t entries, std::uint64_t bytes) {
+    // One implementation for both callers: exchange, durable swap, reclaim the old
+    // copy (see publish_tree_over). Throws only when nothing became visible.
+    auto outcome = publish_tree_over(transfer_ / "final", output_destination_, config_.workspace);
+    // Durability is its own fact, not cleanup: the tree is visible either way, but a
+    // caller resuming after a crash needs to know whether that survives one. When it is
+    // unconfirmed the previous copy is deliberately left in place as the recovery point.
+    report_.workspace["export"]["durable"] = outcome.durability_confirmed;
+    report_.workspace["export"]["durability_error"] = outcome.durability_error;
+    report_.workspace["export"]["retained_previous_path"] =
+        outcome.retained_previous_path.empty() ? "" : outcome.retained_previous_path.string();
+    if (!outcome.cleanup_error.empty())
+        report_.cleanup_errors.push_back(outcome.cleanup_error);
+    if (logger_) {
+        if (!outcome.durability_confirmed)
+            logger_->warn("workspace published but not durable: {}", outcome.durability_error);
+        logger_->info("workspace exported: {} entries, {} bytes to {}", entries, bytes,
+                      output_destination_.string());
     }
 }
 
@@ -554,6 +721,10 @@ void RunSession::finalize() {
             report_.cleanup_errors.push_back(e.what());
         }
     }
+    // init answers before it exits, but an answer can be lost (the peer resets the
+    // connection when init closes with a STOP still unread). The exported tree is
+    // published on disk before the answer, so its presence is the better fact.
+    adopt_landed_export();
     if (cgroup_) {
         try {
             if (!cgroup_->empty())
@@ -619,6 +790,23 @@ void RunSession::finalize() {
     report_.verdict = verdict_name(verdict_of(result));
     report_.security = result.security;
     report_.stop_reason = stop_reason_of(result.outcome);
+    // Artifacts that never reached the host are not a success, whatever the target
+    // exited with: the run promised to deliver the workspace, and it did not. The
+    // export is its own fact, so this never rewrites what the target did beyond
+    // refusing to call the whole run "success".
+    if (quota_workspace_) {
+        const auto &exported = report_.workspace.at("export");
+        if (exported.value("attempted", false) && !exported.value("ok", false)) {
+            auto reason = exported.value("error", std::string{});
+            if (reason.empty())
+                reason = "the sandbox ended before the workspace was exported";
+            report_.errors.push_back("artifacts not delivered: " + reason);
+            if (report_.summary == "success")
+                report_.summary = "host_error";
+            if (report_.verdict != "cleanup_incomplete")
+                report_.verdict = "harness_error";
+        }
+    }
     // The core only fills the timing when it reaches a conclusion. On a forced
     // shutdown it does not, so fall back to wall clock rather than reporting a
     // run that took 0 ms.

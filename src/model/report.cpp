@@ -1,4 +1,4 @@
-#include "sandbox/report.hpp"
+#include "sandbox/model/report.hpp"
 #include <stdexcept>
 namespace sandbox {
 std::string state_name(RunState s) {
@@ -45,7 +45,10 @@ Json StreamReport::json() const {
             {"write_error", write_error}};
 }
 Json RunReport::json() const {
-    return {{"schema_version", 1},
+    // Schema 2 adds `workspace`. Readers must treat it as optional: a run without a
+    // workspace (or a report written by an older build) has no such field, and that
+    // is "unknown", not "nothing was written".
+    return {{"schema_version", 2},
             {"run_id", id},
             {"summary", summary},
             {"verdict", verdict},
@@ -62,6 +65,7 @@ Json RunReport::json() const {
             {"stdout", out.json()},
             {"stderr", err.json()},
             {"metrics", metrics},
+            {"workspace", workspace},
             {"errors", errors},
             {"cleanup",
              {{"descendants_empty", descendants_empty},

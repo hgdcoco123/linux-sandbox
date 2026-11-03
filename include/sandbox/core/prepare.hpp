@@ -46,6 +46,27 @@ struct PrepareStepSpec {
     std::function<void()> undo;
 };
 
+// Contract for a step, in full. It is written down because the journal deliberately
+// does not guess, and a step that quietly violates it leaks something nobody undoes.
+//
+//  - `apply` must be exception-safe. Only the *completed* prefix is undone, so a step
+//    that throws owns whatever it already created. For the common "create a few
+//    directories" shape use `create_directories_or_remove()`, which removes exactly
+//    what that call created (reverse order, rmdir only) and keeps the original error.
+//  - `undo` may assume `apply` returned, and should tolerate being run once. It must
+//    also make an attempt at *every* resource it owns: stopping at the first failed
+//    removal is how the rest of a rollback gets silently skipped. Use
+//    `remove_all_collect()` (or the same "collect and report at the end" shape) so one
+//    failure does not hide the others.
+//  - A failed step may leave *diagnostics inside the run directory*: stdout.bin,
+//    stderr.bin, internal.log, state.json, config.json, control.sock, and a partially
+//    filled transfer/ or input/ snapshot. Those are kept on purpose so a failed run can
+//    be diagnosed; a file that remains there is not by itself a leak.
+//  - What a step must never leave behind is something that outlives the run: a cgroup,
+//    a mount, a process, a socket outside the run directory, or a directory outside it.
+//    If a step can create one of those, its `apply` has to clean up after itself or be
+//    split so the resource-creating part is a step whose `undo` handles it.
+
 struct PrepareOutcome {
     bool ok = false;
     std::optional<PrepareStep> failed_at;

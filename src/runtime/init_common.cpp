@@ -1,5 +1,5 @@
-#include "sandbox/init_common.hpp"
-#include "sandbox/isolation.hpp"
+#include "sandbox/runtime/init_common.hpp"
+#include "sandbox/isolation/isolation.hpp"
 #include <sys/prctl.h>
 
 namespace sandbox {

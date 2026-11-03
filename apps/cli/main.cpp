@@ -1,7 +1,8 @@
-#include "sandbox/batch.hpp"
-#include "sandbox/interactive.hpp"
-#include "sandbox/service.hpp"
-#include "sandbox/session_protocol.hpp"
+#include "sandbox/runtime/batch.hpp"
+#include "sandbox/runtime/interactive.hpp"
+#include "sandbox/storage/artifacts.hpp"
+#include "sandbox/application/service.hpp"
+#include "sandbox/runtime/session_protocol.hpp"
 #include <fstream>
 #include <iostream>
 #include <set>

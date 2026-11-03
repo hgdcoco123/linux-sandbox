@@ -1,7 +1,7 @@
-#include "sandbox/init_common.hpp"
-#include "sandbox/interactive.hpp"
-#include "sandbox/isolation.hpp"
-#include "sandbox/protocol.hpp"
+#include "sandbox/runtime/init_common.hpp"
+#include "sandbox/storage/artifacts.hpp"
+#include "sandbox/isolation/isolation.hpp"
+#include "sandbox/runtime/protocol.hpp"
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -9,6 +9,8 @@
 #include <fstream>
 #include <functional>
 #include <poll.h>
+#include <sched.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -263,6 +265,27 @@ CommandOutcome supervise_command(ControlChannel &control, const SupervisionRules
     }
 }
 
+// A one-shot run ends by sending its last frames and exiting. A STOP that arrives
+// while the artifacts are handed over cannot stop anything - the target is already
+// gone - but a frame left unread when init closes the channel makes the kernel reset
+// the peer, and that reset discards the answers init just sent. Consuming what is
+// queued is what keeps the answer deliverable.
+void discard_pending(ControlChannel &control) {
+    for (;;) {
+        try {
+            if (!control.receive(true))
+                return;
+        } catch (const std::exception &) {
+            return; // a closed or broken channel needs no draining
+        }
+    }
+}
+
+// Defined with the other transfer helpers below; the one-shot path needs it here
+// because it is the last thing a single run does.
+Transferred transfer_out(const RunConfig &config, int transfer, const std::string &tag,
+                         const std::function<bool()> &interrupted);
+
 // One command, then done. The target's stdio was wired by the launcher; init only
 // has to stop holding the write ends so the pipes can reach EOF.
 int run_once(ControlChannel &control, const RunConfig &config, const fs::path &root) {
@@ -270,10 +293,21 @@ int run_once(ControlChannel &control, const RunConfig &config, const fs::path &r
     arm_init(isolated);
     expect(control, ControlKind::prepare);
     prepare_environment(config, root);
+    // The workspace transfer descriptor belongs to init and arrives after PREPARE,
+    // exactly like the session path. It is received before ENV_READY so the run can
+    // never reach the target without the channel its export depends on.
+    UniqueFd transfer_handle;
+    if (!config.workspace_transfer.empty()) {
+        auto channel = expect(control, ControlKind::transfer_channel);
+        if (!channel.fd)
+            throw std::runtime_error("transfer channel has no descriptor");
+        transfer_handle = std::move(channel.fd);
+    }
     control.send(EnvReady{});
     expect(control, ControlKind::exec);
     SupervisionRules rules;
     rules.grace_ms = config.limits.grace_ms;
+    bool started = false;
     const CommandWatcher watcher{
         [&](int exit_code, int signal) {
             MainExit message;
@@ -294,6 +328,7 @@ int run_once(ControlChannel &control, const RunConfig &config, const fs::path &r
             }
         },
         [&] {
+            started = true;
             try {
                 control.send(ExecObserved{});
             } catch (...) {
@@ -306,6 +341,32 @@ int run_once(ControlChannel &control, const RunConfig &config, const fs::path &r
     ::close(2);
     supervise_command(control, rules, spawned.pid, std::move(spawned.exec_error), isolated,
                       watcher);
+    if (transfer_handle) {
+        // Always answer once the channel exists. Staying silent would be
+        // indistinguishable from the sandbox dying during the copy, and the
+        // supervisor would have to guess which one happened.
+        Transferred answer;
+        if (!started) {
+            // A run that never reached exec has no artifacts to deliver, and must not
+            // exchange the caller's directory with an empty tree. The supervisor knows
+            // whether it saw the exec, so it decides what this means.
+            answer.error = "the target never reached exec, so there are no artifacts";
+        } else {
+            // No interrupt callback: a one-shot run has no command loop left to poll,
+            // and a stop request that arrives during the copy is answered by the
+            // supervisor's own deadline. A copy that never finishes therefore ends as
+            // "not delivered", never as success.
+            answer = transfer_out(config, transfer_handle.get(), "final", {});
+        }
+        discard_pending(control);
+        control.send(answer);
+        control.send(InitDone{});
+        // The supervisor sends STOP on the target's exit even when nothing is left to
+        // stop; one that arrived during the copy is queued here. Leave it unread and
+        // the close resets the connection, throwing away the two frames above.
+        discard_pending(control);
+        return 0;
+    }
     control.send(InitDone{});
     return 0;
 }
@@ -319,42 +380,69 @@ bool plain_component(const std::string &name) {
 
 // Move one uploaded tree into the workspace. The destination must not exist: an
 // upload never overwrites what the target already wrote.
-Transferred transfer_in(const RunConfig &config, const std::string &name) {
+
+
+// While a copy runs, a stop request must interrupt it instead of waiting behind the
+// whole tree: the copy is the one thing that can keep the sandbox busy for seconds.
+//
+// Reading the channel here consumes the frame, so the request is remembered and the
+// loop acts on it after the reply is sent - otherwise a STOP consumed during a
+// transfer would be silently dropped and the session would never close.
+struct InterruptOnStop {
+    ControlChannel &control;
+    bool requested = false;
+
+    bool operator()() {
+        auto frame = control.receive(true);
+        if (!frame)
+            return false;
+        if (std::holds_alternative<Stop>(frame->message) ||
+            std::holds_alternative<CancelCommand>(frame->message)) {
+            requested = true;
+            return true;
+        }
+        return false;
+    }
+};
+
+Transferred transfer_in(const RunConfig &config, int transfer, const std::string &name,
+                        const std::function<bool()> &interrupted) {
     Transferred answer;
     try {
-        if (config.workspace_transfer.empty())
+        if (transfer < 0)
             throw std::runtime_error("workspace transfer is not configured");
         if (!plain_component(name))
             throw std::runtime_error("transfer name is not a single component");
-        auto copied = file_request({{"op", "snapshot"},
-                                    {"source", (fs::path("/transfer/in") / name).string()},
-                                    {"destination", (fs::path("/output") / name).string()}},
-                                   config.workspace);
+        auto copied = import_workspace(transfer, name, config.workspace, interrupted);
         answer.ok = true;
         answer.bytes = copied.value("bytes", std::uint64_t{0});
         answer.entries = static_cast<std::uint32_t>(copied.at("entries").size());
+    } catch (const TransferAborted &aborted) {
+        // The copy really did stop, so the channel stays usable. That fact travels as
+        // a type; the supervisor no longer has to recognise a sentence.
+        answer.stop = TransferStop::interrupted;
+        answer.error = aborted.what();
     } catch (const std::exception &failure) {
         answer.error = failure.what();
     }
     return answer;
 }
 
-// Copy the whole workspace out under a tag that must not exist yet, so a failed
-// export can never damage the previous good copy.
-Transferred transfer_out(const RunConfig &config, const std::string &tag) {
+Transferred transfer_out(const RunConfig &config, int transfer, const std::string &tag,
+                         const std::function<bool()> &interrupted) {
     Transferred answer;
     try {
-        if (config.workspace_transfer.empty())
+        if (transfer < 0)
             throw std::runtime_error("workspace transfer is not configured");
         if (!plain_component(tag))
             throw std::runtime_error("transfer tag is not a single component");
-        auto copied = file_request({{"op", "snapshot"},
-                                    {"source", "/output"},
-                                    {"destination", (fs::path("/transfer") / tag).string()}},
-                                   config.workspace);
+        auto copied = export_workspace(transfer, tag, config.workspace, interrupted);
         answer.ok = true;
         answer.bytes = copied.value("bytes", std::uint64_t{0});
         answer.entries = static_cast<std::uint32_t>(copied.at("entries").size());
+    } catch (const TransferAborted &aborted) {
+        answer.stop = TransferStop::interrupted;
+        answer.error = aborted.what();
     } catch (const std::exception &failure) {
         answer.error = failure.what();
     }
@@ -377,6 +465,17 @@ int run_persistent(ControlChannel &control, const RunConfig &config, const fs::p
     ::close(0);
     ::close(1);
     ::close(2);
+    // The transfer directory arrives as a descriptor and stays with init: the target
+    // never inherits it (close_from(4) runs before exec), so nothing of the host
+    // channel exists in the target's filesystem.
+    UniqueFd transfer_handle;
+    if (!config.workspace_transfer.empty()) {
+        auto channel = expect(control, ControlKind::transfer_channel);
+        if (!channel.fd)
+            throw std::runtime_error("transfer channel has no descriptor");
+        transfer_handle = std::move(channel.fd);
+    }
+    const int transfer = transfer_handle.get();
     control.send(EnvReady{});
     for (;;) {
         auto frame = control.receive();
@@ -389,11 +488,30 @@ int run_persistent(ControlChannel &control, const RunConfig &config, const fs::p
         if (std::holds_alternative<CancelCommand>(frame->message))
             continue; // no command is active: nothing to cancel
         if (auto *import = std::get_if<ImportTree>(&frame->message)) {
-            control.send(transfer_in(config, import->name));
+            InterruptOnStop watch{control};
+            auto answer = transfer_in(config, transfer, import->name, std::ref(watch));
+            answer.sequence = import->sequence;
+            control.send(answer);
+            // A stop that arrived during the copy was consumed there; honour it now.
+            if (watch.requested) {
+                control.send(InitDone{});
+                return 0;
+            }
             continue;
         }
         if (auto *exported = std::get_if<ExportTree>(&frame->message)) {
-            control.send(transfer_out(config, exported->tag));
+            InterruptOnStop watch{control};
+            auto answer = transfer_out(config, transfer, exported->tag, std::ref(watch));
+            answer.sequence = exported->sequence;
+            control.send(answer);
+            if (watch.requested) {
+                control.send(InitDone{});
+                // The supervisor closes a session by sending STOP as well; one that arrives
+                // after this point would still be unread at exit, and a close with unread
+                // data resets the peer - throwing away the INIT_DONE above. Consume it.
+                discard_pending(control);
+                return 0;
+            }
             continue;
         }
         if (!std::holds_alternative<StdinHandle>(frame->message) || !frame->fd)

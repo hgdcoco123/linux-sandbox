@@ -3,7 +3,7 @@
 > 0.5 新增 `sandbox-run --batch --config FILE`，不变更应用专属 AppArmor 策略；完整验收新增批次和输出线程，见 VALIDATION.md。
 
 > 0.4：安装策略不变。普通用户 CLI 包装器与 Python SDK 共用 sdk/launch.py；升级载荷会包含该模块。
-> SDK 自动委派路径应额外执行 tests/installed_sdk.py 验收，步骤见 VALIDATION.md。
+> SDK 自动委派路径应额外执行 tests/acceptance/installed_sdk.py 验收，步骤见 VALIDATION.md。
 
 > 最新结果：用户已在上述 Ubuntu 环境完成安装、普通用户探测、保留原策略升级及完整隔离脚本验收；详见 VALIDATION.md 最新记录。真实卸载和全面故障注入仍待验证。
 

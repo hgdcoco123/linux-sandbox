@@ -87,10 +87,10 @@ P0 使用原 LauncherClient、CgroupV2、MetricsSampler、OutputCapture 和 RunS
 | src/runtime/interactive_session.cpp | 会话监督、控制请求、预算、命令记录与收尾 |
 | src/runtime/persistent_init.cpp | 环境准备一次、重复 fork/exec、等待和清理后代 |
 | src/storage/artifacts.cpp | 基于目录 FD 的遍历、复制、清单和导出 |
-| include/sandbox/sha256.hpp | 流式 SHA-256，供产物身份核验 |
+| include/sandbox/storage/sha256.hpp | 流式 SHA-256，供产物身份核验 |
 | sdk/session_client.py | 会话客户端，复用 C++ 执行能力 |
-| tests/session_model_tests.cpp | 会话配置边界、摘要标准向量 |
-| tests/sessions.py | process 会话、文件及显式委派环境下的 isolated 冒烟 |
+| tests/unit/session_model_tests.cpp | 会话配置边界、摘要标准向量 |
+| tests/integration/sessions.py | process 会话、文件及显式委派环境下的 isolated 冒烟 |
 
 ## 6. 启动与命令协议
 
@@ -147,6 +147,8 @@ env 如显式传入则替换本条命令的环境映射，不与上一条命令�
 PTY 和持久 Shell 都不在本次范围。
 
 isolated 会话的 /output 来自实例 workspace 目录，只有该目录暴露给目标。
+隔离模式下单次执行与批量任务的 /output 同样是沙箱内 tmpfs（受 `workspace.max_bytes` / `max_entries`
+约束）；`mounts[target=/output].source` 此时是运行结束时最后一次导出落地的宿主目录，运行期间那里看不到新产物。
 运行记录、控制 socket、owner 和结果文件所在的父目录不挂载给目标。
 /work 和 /tmp 的 tmpfs 也随环境存活，但当前文件交付 API 只管理 /output。
 process 模式不提供受管理的隔离工作区；可用可信宿主 cwd 测试连续执行，文件 RPC 被拒绝。

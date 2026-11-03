@@ -1,6 +1,6 @@
-#include "sandbox/workspace_service.hpp"
+#include "sandbox/storage/workspace_service.hpp"
 #include "sandbox/core/ops_json.hpp"
-#include "sandbox/interactive.hpp"
+#include "sandbox/storage/artifacts.hpp"
 #include <variant>
 
 namespace sandbox {

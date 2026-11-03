@@ -28,15 +28,15 @@ $include = @("-I$(Join-Path $root 'include')", "-I$(Join-Path $root 'third_party
 $core = Get-ChildItem (Join-Path $root 'src/core') -Filter *.cpp | ForEach-Object { $_.FullName }
 
 $suites = [ordered]@{
-    core       = @('tests/core_tests.cpp')
-    wire       = @('tests/wire_tests.cpp')
-    supervisor = @('tests/supervisor_tests.cpp')
-    prepare    = @('tests/prepare_tests.cpp')
-    control    = @('tests/control_tests.cpp')
-    workspace  = @('tests/workspace_tests.cpp')
-    ops_json   = @('tests/ops_json_tests.cpp')
-    fault      = @('tests/fault_tests.cpp')
-    model      = @('tests/model_tests.cpp',
+    core       = @('tests/unit/core_tests.cpp')
+    wire       = @('tests/experimental/wire_tests.cpp')
+    supervisor = @('tests/unit/supervisor_tests.cpp')
+    prepare    = @('tests/unit/prepare_tests.cpp')
+    control    = @('tests/unit/control_tests.cpp')
+    workspace  = @('tests/unit/workspace_tests.cpp')
+    ops_json   = @('tests/unit/ops_json_tests.cpp')
+    fault      = @('tests/unit/fault_tests.cpp')
+    model      = @('tests/unit/model_tests.cpp',
                    'src/model/config.cpp', 'src/model/report.cpp',
                    'src/model/command_model.cpp', 'src/model/task.cpp')
 }

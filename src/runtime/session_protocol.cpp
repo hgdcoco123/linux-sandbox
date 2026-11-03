@@ -1,7 +1,7 @@
-#include "sandbox/session_protocol.hpp"
-#include "sandbox/session_wire.hpp"
-#include "sandbox/session_store.hpp"
-#include "sandbox/store.hpp"
+#include "sandbox/runtime/session_protocol.hpp"
+#include "sandbox/runtime/session_wire.hpp"
+#include "sandbox/storage/session_store.hpp"
+#include "sandbox/storage/store.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>

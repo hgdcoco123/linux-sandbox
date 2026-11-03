@@ -19,7 +19,7 @@ for n in range(phnum):
 if a.output.exists():
     p.error("output must not exist")
 a.output.mkdir(parents=True, mode=0o755)
-for name in ("usr/bin", "input", "output", "work", "tmp", "proc", "dev", "transfer", ".oldroot"):
+for name in ("usr/bin", "input", "output", "work", "tmp", "proc", "dev", ".oldroot"):
     (a.output / name).mkdir(parents=True, mode=0o755)
 shutil.copyfile(a.fixture, a.output / "usr/bin/sandbox-fixture")
 (a.output / "usr/bin/sandbox-fixture").chmod(0o755)

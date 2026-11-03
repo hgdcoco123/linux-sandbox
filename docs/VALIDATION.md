@@ -50,7 +50,7 @@ test_root=$(mktemp -d /tmp/sbx-engine.XXXXXX)
 python3 /opt/linux-sandbox/share/linux-sandbox/tools/make_runtime.py \
   --fixture "$PWD/build/sandbox-fixture" --output "$test_root/runtime"
 /opt/linux-sandbox/bin/sandbox-run --test-runtime "$test_root/runtime"
-python3 /opt/linux-sandbox/share/linux-sandbox/tests/installed_sdk.py \
+python3 /opt/linux-sandbox/share/linux-sandbox/tests/acceptance/installed_sdk.py \
   /opt/linux-sandbox/bin/sandbox "$test_root/runtime"
 ```
 
@@ -96,7 +96,7 @@ test_root=$(mktemp -d /tmp/sbx-core.XXXXXX)
 python3 /opt/linux-sandbox/share/linux-sandbox/tools/make_runtime.py \
   --fixture "$PWD/build/sandbox-fixture" --output "$test_root/runtime"
 /opt/linux-sandbox/bin/sandbox-run --test-runtime "$test_root/runtime"
-python3 /opt/linux-sandbox/share/linux-sandbox/tests/installed_sdk.py \
+python3 /opt/linux-sandbox/share/linux-sandbox/tests/acceptance/installed_sdk.py \
   /opt/linux-sandbox/bin/sandbox "$test_root/runtime"
 ```
 
@@ -123,7 +123,7 @@ Main processes terminated with: code=exited/status=0
 
 该结果确认现有脚本覆盖的隔离单次执行、proc PID 视图、文件边界、网络与 seccomp 基线检查、后代回收、超时、OOM 和指标查询，以及 process 会话回归和 isolated 会话冒烟路径通过。
 隔离会话冒烟包含连续命令、工作文件保留、工作区程序执行、目录上传和导出。
-测试内容以 tests/isolation.py 与 tests/sessions.py 为准；不能据此宣称任意恶意代码安全或完整故障覆盖。
+测试内容以 tests/acceptance/isolation.py 与 tests/integration/sessions.py 为准；不能据此宣称任意恶意代码安全或完整故障覆盖。
 
 仍待验证：真实卸载、崩溃/掉电恢复、磁盘故障、长期泄漏、并发竞争以及更广泛环境兼容性。
 下文“未执行/待验收”描述为此前历史记录，以本节对这些具体测试的最新结论为准。
@@ -198,7 +198,7 @@ AppArmor 限制开关已开启，但缺少拒绝日志，不能把具体策略�
 - 原指标解析与采样测试：本次重新编译并执行，通过。
 - 新会话模型测试：通过配置往返、非法期限/类型、SHA-256 空串、分块 abc 与百万 a 标准向量。
 - 产品源码 Linux x86_64 交叉编译与 sandbox / sandbox-launcher 链接检查：执行，结果随交付记录核验。
-- 新增 tests/sessions.py：覆盖连续执行、二进制输入输出、启动失败后复用、取消、超时、输出截断、重连、目录复制与链接拒绝。
+- 新增 tests/integration/sessions.py：覆盖连续执行、二进制输入输出、启动失败后复用、取消、超时、输出截断、重连、目录复制与链接拒绝。
 - 委派 wrapper 增加 isolated 会话冒烟路径，沿用 SANDBOX_TEST_RUNTIME / SANDBOX_TEST_CGROUP。
 - 上述 Linux 集成测试已编写，**未在当前环境执行**。不能把构建通过或测试代码存在当成行为通过。
 - OOM、会话到期、SIGKILL 恢复、磁盘故障和竞争条件仍需真实 Linux 验收；暂无完整故障注入覆盖。
@@ -219,7 +219,7 @@ AppArmor 限制开关已开启，但缺少拒绝日志，不能把具体策略�
 
 ## 实际通过
 
-1. 本机编译、运行 `tests/model_tests.cpp`：通过。
+1. 本机编译、运行 `tests/unit/model_tests.cpp`：通过。
    覆盖字段拒绝、数值类型、边界、危险模式显式授权、配置往返、状态机非法转换、报告原因优先级与 JSON/UTF-8。
 2. 使用 Zig 0.13.0 的 Linux x86_64 / glibc 2.38 目标，编译全部 16 个产品 C++ 翻译单元：通过。
 3. `sandbox` 和 `sandbox-launcher` Linux ELF 可执行文件链接：通过。

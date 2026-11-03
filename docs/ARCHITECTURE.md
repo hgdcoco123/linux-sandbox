@@ -110,7 +110,11 @@ P0 不持有目标输出写端，P1 和 P2 也必须及时关闭它们，否则 
 
 - 可信静态运行时目录绑定到运行实例的 rootfs 挂载点。
 - 对运行时视图施加递归只读、nodev、nosuid 等标志。
-- 白名单 /input 和 /output 通过已打开目录 FD 绑定；/input 强制只读，映射不允许执行。
+- 白名单 /input 与 /output 的目录映射都通过已打开目录 FD 绑定；/input 强制只读，映射不允许执行。
+- 隔离模式的 /output 是例外：它是 namespace 内的 workspace tmpfs（`size=workspace.max_bytes`、
+  `nr_inodes=workspace.max_entries`），宿主目录只是**导出目的地**，不是被挂进沙箱的工作区。单次执行与批量任务
+  在目标结束后一次性导出并原子发布，会话按需移交；目标既看不到宿主目录，也没有 `/transfer` 路径（通道以 fd 交给 init）。
+  只有 process 模式把 /output 直接绑到宿主目录（诊断后端，无配额）。
 - /work 与 /tmp 各有大小受限 tmpfs；该内存也受组级限制约束。
 - /dev 是小 tmpfs，仅绑定 null、zero、random、urandom。
 - 在 P2 中先将新 PID namespace 的 procfs 挂到新根/proc，不绑定宿主 proc。

@@ -1,8 +1,14 @@
 # 实机验收手册
 
-> 本仓库当前状态：**没有任何 Linux 运行时行为被验证过**。
-> 本机能证明的只有：类型、接口、符号完整、可移植逻辑的行为（见 `tools/cross-verify.ps1`）。
-> 这份文档是把"能证明的"变成"真的能用"的最短路径。
+> **当前状态（0.6 重构，按版本记录，不要和下面历史段落混读）**：
+> - Ubuntu 24.04 x86_64：`ctest` **33/33**；`tools/isolated-accept.sh` **全绿**——必检行全齐、
+>   `NOT EXECUTED` 为 0、服务 `code=exited/status=0`、sysctl 按原值恢复。
+> - 已验证到的行为：namespace/cgroup/seccomp 边界、`/input` 只读与 `snapshot_copy`、隔离模式
+>   `/output` 的 tmpfs 配额（会话累计；单次执行/批量在结束时一次性导出）、`/transfer` 的 fd 化
+>   双向移交、导出失败与超时/中断的报告语义。
+> - **没有**验证过：其他发行版/内核、崩溃与掉电恢复、长时间压力、真正的恶意代码。
+>
+> 下面第 2–3 节是复现路径；第 4–7 节是失败时回传什么、以及最容易出问题的地方。
 
 ## 1. 环境
 
@@ -36,6 +42,18 @@ ctest --test-dir build --output-on-failure
 
 不要因为 skip 就认为隔离没问题——它表示"没测"。
 
+**覆盖口径**：`publish_tests` 的跨文件系统用例只在 `/dev/shm` 与 `/tmp` 是不同设备时才执行，
+不满足时它会打印一行并正常返回。所以它的最终成功行**不证明 EXDEV 分支跑过**——验收记录必须抄下
+这两行里的哪一行：
+
+```text
+cross-filesystem publish: exercised (EXDEV path, /dev/shm differs from /tmp)
+cross-filesystem publish: NOT exercised (same device as /tmp); the EXDEV path is unverified on this machine
+```
+
+同理，`tests/integration/publish_tests.cpp` 里"持久性未确认"的用例是用"父目录不可读"模拟的，验证的是
+"交换成功但无法确认持久性"这条分支，**不是** `fsync()` 返回 I/O 错误本身。
+
 ## 3. 委派下的隔离测试
 
 ```bash
@@ -46,10 +64,15 @@ systemd-run --user --wait --pipe --collect -p Delegate=yes -p Type=exec \
   --sandbox "$PWD/build/sandbox" --test-runtime "$test_root/runtime"
 ```
 
-期望：`isolated integration passed`、`process sessions and artifact regression passed`、
+期望：`isolated integration passed`、
+`single-run quota enforced and the partial tree was exported`、
+`a refused export is reported, not passed off as success`、
+`process sessions and artifact regression passed`、
 `isolated session smoke passed`、`isolated /input snapshot passed`、
-`workspace quota, export and failure reporting passed`、`isolated batch smoke passed`、
-`Finished with result: success`。
+`workspace quota, export and failure reporting passed`、
+`an external stop interrupts an in-flight export`、
+`a timed-out transfer is reported and the channel is quarantined`、
+`isolated batch smoke passed`、`Finished with result: success`。
 
 更省事的方式：
 
@@ -107,6 +130,12 @@ exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
   `/transfer` 双向移交与导出失败报告：**均已端到端验过**（`0674c26`，`bash tools/isolated-accept.sh`
   全绿，服务 status=0）。不放开 AppArmor 开关时只能验宿主侧那半段（复制、原子发布、
   按 `keep_on_close` 保留/删除）
+- 单次执行/批量任务的 `/output` tmpfs 配额与"运行结束时导出"（决策 A）：用例在
+  `tests/acceptance/isolation.py`，必检行是 `single-run quota enforced and the partial tree was exported`
+  与 `a refused export is reported, not passed off as success`。**已端到端验过**（本轮修复后
+  `bash tools/isolated-accept.sh` 必检行全齐、`NOT EXECUTED` 为 0、服务 status=0）；
+  OOM group kill 会连 init 一起杀掉，此时产物确实交付不了，报告会写"未交付"——这是对的，
+  用例里 OOM 那条是 `export_ok=None`。"目标成功但产物未交付"时的 verdict/退出码含义见 §5.5。
 - `session_wire` 的**回包方向**仍是「类型化记录 → 渲染成 JSON → Protobuf」，见 MIGRATION_SESSION 第 4 步
 - 两份 pid-1 实现只剩环境准备共享，命令循环仍各写一份
 
@@ -116,6 +145,7 @@ exit     调用方该不该继续        0 / 10 / 11 / 124 / 130 / 13 / 12 / 125
 内核/发行版：
 构建：OK / 错误（贴末尾 30 行）
 ctest：通过 N / 失败 M / 跳过 K
+publish_tests 跨文件系统分支：exercised / NOT exercised（贴 §2 那一行）
 隔离测试：通过 / 失败（贴输出）
 首个失败用例：
   run 目录：

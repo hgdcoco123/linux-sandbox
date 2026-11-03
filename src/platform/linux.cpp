@@ -1,16 +1,66 @@
-#include "sandbox/linux.hpp"
+#include "sandbox/platform/linux.hpp"
 #include <cerrno>
+#include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <sys/prctl.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <system_error>
 #include <unistd.h>
 namespace sandbox {
+void create_directories_or_remove(const std::vector<fs::path> &paths) {
+    std::vector<fs::path> created;
+    std::string reason;
+    for (const auto &path : paths) {
+        if (::mkdir(path.c_str(), 0700) == 0) {
+            created.push_back(path);
+            continue;
+        }
+        const int error = errno;
+        // A directory that is already there is reused, not removed: it is not this
+        // call's to delete, and a retried preparation must be able to go on.
+        struct stat existing {};
+        if (error == EEXIST && ::lstat(path.c_str(), &existing) == 0 && S_ISDIR(existing.st_mode))
+            continue;
+        reason = "create directory " + path.string() + ": " + std::strerror(error);
+        break;
+    }
+    if (reason.empty())
+        return;
+    // Reclaim only what this call created: reverse order, rmdir only. A non-empty
+    // directory survives rather than being deleted recursively - a cleanup that widens
+    // into the tree is a worse failure than a leftover.
+    std::string leftovers;
+    for (auto it = created.rbegin(); it != created.rend(); ++it) {
+        if (::rmdir(it->c_str()) == 0)
+            continue;
+        const int error = errno;
+        leftovers += "\n  rollback: rmdir " + it->string() + ": " + std::strerror(error);
+    }
+    // The original reason comes first; a failed removal is a diagnostic, not a
+    // replacement for it, and never silently dropped.
+    throw std::runtime_error(reason + leftovers);
+}
+std::string remove_all_collect(const std::vector<fs::path> &paths) {
+    std::string failures;
+    for (const auto &path : paths) {
+        if (path.empty())
+            continue;
+        std::error_code failure;
+        fs::remove_all(path, failure);
+        if (!failure)
+            continue;
+        if (!failures.empty())
+            failures += "; ";
+        failures += path.string() + ": " + failure.message();
+    }
+    return failures;
+}
 void UniqueFd::reset(int fd) noexcept {
     if (fd_ >= 0)
         ::close(fd_);

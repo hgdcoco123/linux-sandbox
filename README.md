@@ -12,21 +12,22 @@
 - 会话持久化记录已类型化；请求在入口处一次性解成业务类型。
 - **仍是 JSON 的地方**（有意为之，见 [REDESIGN §4.1](docs/REDESIGN.md)）：协议回包、
   配置文件、CLI 输出、持久化记录的编码。
-- **尚未完成**：批次仍是独立进程 + JSON 汇总；`/output` 没有运行期配额；
+- **尚未完成**：批次仍是独立进程 + JSON 汇总；
   seccomp 仍是兼容型拒绝策略（只记录了名称与版本）。见
   [剩余工作](docs/REMAINING.md)。
 
 **先读 [重构设计](docs/REDESIGN.md)、[剩余工作与验证边界](docs/REMAINING.md)，实机验收按 [验收手册](docs/ACCEPTANCE.md)；会话路径迁移的执行顺序见 [会话迁移步骤](docs/MIGRATION_SESSION.md)。**
 本机可复现的验证（可移植测试 + 交叉编译 + 链接）见 `tools/cross-verify.ps1`。
 
-**注意：本仓库状态下没有任何 Linux 运行时行为被验证过。** 交叉编译与链接只能证明
-类型、接口与符号自洽；namespace、cgroup、seccomp、信号时序必须在真实 Linux 上验收。
+**验证状态（0.6）：** 在 Ubuntu 24.04 上跑过全量隔离验收——`ctest` 33/33、
+`tools/isolated-accept.sh` 必检行全齐、服务 `status=0`（见 [ACCEPTANCE](docs/ACCEPTANCE.md) 顶部）。
+交叉编译与链接仍只证明类型、接口与符号自洽；**其他发行版/内核、崩溃恢复与长期压力没有验证**。
 ## 0.5 本机任务执行引擎
 
 新增类型化命令模型、有界输出写入队列与工作线程、共享 epoll 等待入口，以及 FIFO/资源预算限制的独立任务批次。
 单次执行和连续会话继续保留。当前版本以 [TASK_ENGINE.md](docs/TASK_ENGINE.md) 为架构说明，
 [LEARNING_ROUTE.md](docs/LEARNING_ROUTE.md) 为学习入口，[PERFORMANCE.md](docs/PERFORMANCE.md) 说明实验方法与限制。
-本轮已完成本地可移植测试和 Linux 交叉编译；**0.5 真实 Linux 运行尚待验收**，上一版 0.4 的通过结果不能替代本轮测试。
+**（历史，写于 0.5 轮）** 当时完成的是本地可移植测试与 Linux 交叉编译，真实运行验收留到 0.6 一并做（见上方验证状态）。
 
 诊断批次示例：`./build/sandbox batch --config profiles/batch-process-demo.json --allow-unsafe`。
 正式隔离批次使用 `/opt/linux-sandbox/bin/sandbox-run --batch --config FILE`，Python 使用 `sdk.batch_client.BatchClient`。
@@ -62,7 +63,8 @@
 **CLI、请求 JSON 与 Python 接口：[SESSION_API.md](docs/SESSION_API.md)。**
 
 0.3 功能已有用户提供的真实 Linux 通过记录，0.4 重构需重新验收；详见 [VALIDATION.md](docs/VALIDATION.md)。
-下面原有 `run` 使用方式仍保留。isolated 会话拥有自己的 `/output`，不要配置外部 `/output` 映射。
+下面原有 `run` 使用方式仍保留。隔离模式下 `/output` 一律是沙箱自己的 tmpfs（单次执行、批次任务与会话同一条磁盘边界），
+`mounts[target=/output].source` 是运行结束时最后一次导出落地的宿主目录；运行期间宿主目录看不到新产物。
 
 一款 C++20 Linux 单机程序隔离执行软件。提供独立 CLI、JSON 配置、运行报告及 Python 进程式 SDK。宿主程序负责执行生命周期，独立 launcher 创建隔离 init，目标运行在 init 管理的环境中。
 

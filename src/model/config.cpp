@@ -1,4 +1,4 @@
-#include "sandbox/config.hpp"
+#include "sandbox/model/config.hpp"
 #include <stdexcept>
 #include <fstream>
 #include <set>

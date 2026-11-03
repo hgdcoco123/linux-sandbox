@@ -1,4 +1,4 @@
-#include "sandbox/isolation.hpp"
+#include "sandbox/isolation/isolation.hpp"
 #include <cerrno>
 #include <linux/capability.h>
 #include <memory>

@@ -31,11 +31,24 @@ echo "== $sysctl_key is currently $original"
 
 # Ask for the password once, up front: the restore trap must not block on a prompt.
 sudo -v || fail "sudo is required to relax and restore $sysctl_key"
+restore_failed=0
 restore() {
-    sudo -n sysctl -q -w "$sysctl_key=$original"
-    echo "== restored $sysctl_key=$original"
+    if sudo -n sysctl -q -w "$sysctl_key=$original"; then
+        echo "== restored $sysctl_key=$original"
+    else
+        echo "== FAILED to restore $sysctl_key: the host is still relaxed" >&2
+        echo "==   run manually: sudo sysctl -w $sysctl_key=$original" >&2
+        restore_failed=1
+    fi
 }
-trap restore EXIT INT TERM
+# A run that cannot put the host back is not a successful run, whatever the tests said.
+# Restoring belongs to EXIT alone: when the handler is also installed for INT/TERM a
+# signal would restore the sysctl and then *continue* through the remaining checks with
+# the host already back to restrictive, mangling PIPESTATUS on the way. INT/TERM just
+# pick an exit status; EXIT restores exactly once.
+trap 'restore; [ "$restore_failed" -eq 0 ] || exit 1' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [ -x "$binary" ] || fail "no $binary: build the tree first (cmake --build build)"
 [ -x "$fixture" ] || fail "no $fixture: build the tree first"
@@ -50,18 +63,25 @@ sudo -n sysctl -q -w "$sysctl_key=0" || fail "cannot relax $sysctl_key"
 echo "== relaxed $sysctl_key=0 for the duration of this run"
 
 output="$test_root/run.log"
+# A failing case deletes its session state on the way out; keep it so the first red
+# run is diagnosable instead of costing another round trip.
+artifacts="$test_root/artifacts"
 systemd-run --user --wait --pipe --collect -p Delegate=yes -p Type=exec \
     /usr/bin/python3 "$root/tools/delegated_run.py" \
-    --sandbox "$binary" --test-runtime "$runtime" 2>&1 | tee "$output"
+    --sandbox "$binary" --test-runtime "$runtime" --artifacts "$artifacts" 2>&1 | tee "$output"
 status=${PIPESTATUS[0]}
 
 # Every case the design requires must actually have run and passed.
 required=(
     "isolated integration passed"
+    "single-run quota enforced and the partial tree was exported"
+    "a refused export is reported, not passed off as success"
     "process sessions and artifact regression passed"
     "isolated session smoke passed"
     "isolated /input snapshot passed"
     "workspace quota, export and failure reporting passed"
+    "an external stop interrupts an in-flight export"
+    "a timed-out transfer is reported and the channel is quarantined"
     "isolated batch smoke passed"
 )
 incomplete=0
@@ -83,5 +103,6 @@ if [ "$status" -ne 0 ]; then
 fi
 
 echo "== log kept at $output (runtime at $runtime)"
+echo "== session state kept at $artifacts"
 [ "$incomplete" -eq 0 ] || fail "isolated acceptance incomplete"
 echo "ISOLATED ACCEPTANCE PASSED: every required case ran and passed"

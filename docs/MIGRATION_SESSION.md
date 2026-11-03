@@ -7,7 +7,7 @@
 ## 为什么不能一次做完
 
 `interactive_session.cpp`、`session_store.cpp`、`command_model.*`、`session_protocol.*`、
-`sdk/session_wire.py`、`tests/sessions.py` 之间存在双向依赖：控制器要 `SessionStore` 的
+`sdk/session_wire.py`、`tests/integration/sessions.py` 之间存在双向依赖：控制器要 `SessionStore` 的
 `replay/accept`，而这两者目前只接受旧 `ExecuteRequest`。一次改完等于同时换掉协议、存储、
 SDK 和测试，中间态不可编译，也无法分阶段验收。
 

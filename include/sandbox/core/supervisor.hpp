@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <utility>
 #include <optional>
 #include <string>
 #include <variant>
@@ -78,17 +79,23 @@ class ExecutionCore {
     std::vector<SupervisionAction> start_failed(std::string reason, int exec_errno, Millis now);
     std::vector<SupervisionAction> tick(Millis now);
 
-    // Cleanup facts that the runtime learns after the target result is sealed.
+    // Cleanup facts that the runtime learns after the target result is sealed. These
+    // are the only write paths into the result: the result itself is read-only to the
+    // runtime, so "the state machine forms the result" stays true by construction
+    // rather than by agreement.
     void mark_launcher_reaped() noexcept { result_.cleanup.launcher_reaped = true; }
     void mark_cgroup_removed() noexcept { result_.cleanup.cgroup_removed = true; }
     void mark_workspace_removed() noexcept { result_.cleanup.workspace_removed = true; }
     void add_cleanup_failure(CleanupStage, std::string detail);
+    // Which syscall policy the target ran under is known before the first fact arrives.
+    void set_security(SecurityPolicyFacts facts) noexcept { result_.security = std::move(facts); }
 
+    // Command supervision only: the outcome is sealed and no further fact changes it.
+    // Environment teardown (launcher reap, cgroup removal, workspace delivery) and
+    // writing the report happen later, in the controller. See docs/HANDOFF.md 3.6.
     [[nodiscard]] bool finished() const noexcept { return finished_; }
     [[nodiscard]] Phase phase() const noexcept { return phase_; }
     [[nodiscard]] const ExecutionResult &result() const noexcept { return result_; }
-    // Cleanup facts arrive after the run; the runtime fills them in.
-    [[nodiscard]] ExecutionResult &result() noexcept { return result_; }
 
   private:
     [[nodiscard]] bool outcome_decided() const noexcept { return outcome_.has_value(); }

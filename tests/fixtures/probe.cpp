@@ -138,6 +138,21 @@ int main(int argc, char **argv) {
     // Quota probes: the workspace is a tmpfs, so going over its byte or inode budget
     // fails the write with ENOSPC. Return 60 so the caller can tell "the quota
     // stopped me" from any other failure.
+    if (!std::strcmp(mode, "link-output")) {
+        // An export refuses symlinks, so this makes the handover fail on purpose while
+        // the target itself succeeds: the report has to tell those two apart.
+        return ::symlink("/etc/passwd", "/output/link") < 0 ? 48 : 0;
+    }
+    // The transfer channel belongs to init. If the target can write into it, the
+    // workspace quota has an unmetered hole and staged data can be tampered with.
+    if (!std::strcmp(mode, "transfer-probe")) {
+        int fd = ::open("/transfer/pwn", O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0) {
+            ::close(fd);
+            return 70;
+        }
+        return 0;
+    }
     if (!std::strcmp(mode, "fill-bytes")) {
         long long wanted = argc > 2 ? std::atoll(argv[2]) : 0;
         // A distinct name per call: the quota is cumulative, so a test that fills

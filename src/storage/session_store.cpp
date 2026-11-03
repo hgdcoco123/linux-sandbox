@@ -1,4 +1,4 @@
-#include "sandbox/session_store.hpp"
+#include "sandbox/storage/session_store.hpp"
 
 #include "sandbox/core/record_json.hpp"
 

@@ -60,6 +60,8 @@ const char *control_kind_name(ControlKind kind) noexcept {
         return "export_tree";
     case ControlKind::transferred:
         return "transferred";
+    case ControlKind::transfer_channel:
+        return "transfer_channel";
     }
     return "unknown";
 }
@@ -82,12 +84,24 @@ const char *command_stop_name(CommandStop stop) noexcept {
     return "unknown";
 }
 
+const char *transfer_stop_name(TransferStop stop) noexcept {
+    switch (stop) {
+    case TransferStop::none:
+        return "none";
+    case TransferStop::interrupted:
+        return "interrupted";
+    }
+    return "unknown";
+}
+
 FdContract fd_contract(ControlKind kind) noexcept {
     switch (kind) {
     case ControlKind::import_tree:
     case ControlKind::export_tree:
     case ControlKind::transferred:
         return FdContract{0, "none"};
+    case ControlKind::transfer_channel:
+        return {1, "transfer directory descriptor"};
     case ControlKind::init_created:
         return {1, "init pidfd"};
     case ControlKind::stdin_handle:
@@ -154,6 +168,8 @@ ControlKind kind_of(const ControlMessage &message) noexcept {
                 return ControlKind::export_tree;
             else if constexpr (std::is_same_v<T, Transferred>)
                 return ControlKind::transferred;
+            else if constexpr (std::is_same_v<T, TransferChannel>)
+                return ControlKind::transfer_channel;
             else
                 return ControlKind::init_error;
         },
@@ -201,13 +217,17 @@ std::string encode(const ControlMessage &message) {
                 payload.varint(static_cast<std::uint64_t>(value.elapsed.count()));
             } else if constexpr (std::is_same_v<T, ImportTree>) {
                 payload.text(value.name);
+                payload.varint(value.sequence);
             } else if constexpr (std::is_same_v<T, ExportTree>) {
                 payload.text(value.tag);
+                payload.varint(value.sequence);
             } else if constexpr (std::is_same_v<T, Transferred>) {
                 payload.u8(value.ok ? 1 : 0);
+                payload.u8(static_cast<std::uint8_t>(value.stop));
                 payload.text(value.error);
                 payload.varint(value.bytes);
                 payload.varint(value.entries);
+                payload.varint(value.sequence);
             }
         },
         message);
@@ -249,6 +269,9 @@ ControlMessage decode(std::string_view packet) {
         break;
     case ControlKind::prepare:
         message = Prepare{};
+        break;
+    case ControlKind::transfer_channel:
+        message = TransferChannel{};
         break;
     case ControlKind::exec:
         message = Exec{};
@@ -324,23 +347,31 @@ ControlMessage decode(std::string_view packet) {
             CommandDone{*index, code, signal, exec_errno, static_cast<CommandStop>(stop), elapsed};
         break;
     }
-    case ControlKind::import_tree:
-        message = ImportTree{reader.text()};
+    case ControlKind::import_tree: {
+        auto name = reader.text();
+        message = ImportTree{std::move(name), reader.varint()};
         break;
-    case ControlKind::export_tree:
-        message = ExportTree{reader.text()};
+    }
+    case ControlKind::export_tree: {
+        auto tag = reader.text();
+        message = ExportTree{std::move(tag), reader.varint()};
         break;
+    }
     case ControlKind::transferred: {
         const auto ok = reader.u8();
         if (ok > 1)
             throw ControlError("BAD_PACKET", "invalid transfer flag");
+        const auto stop = reader.u8();
+        if (stop > static_cast<std::uint8_t>(TransferStop::interrupted))
+            throw ControlError("BAD_PACKET", "unknown transfer stop reason");
         auto error = reader.text();
         auto bytes = reader.varint();
         auto entries = reader.varint();
         if (entries > 0xFFFFFFFFULL)
             throw ControlError("BAD_PACKET", "entry count out of range");
-        message = Transferred{ok == 1, std::move(error), bytes,
-                              static_cast<std::uint32_t>(entries)};
+        auto sequence = reader.varint();
+        message = Transferred{ok == 1, static_cast<TransferStop>(stop), std::move(error), bytes,
+                              static_cast<std::uint32_t>(entries), sequence};
         break;
     }
     default:

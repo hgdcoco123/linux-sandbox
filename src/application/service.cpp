@@ -1,5 +1,5 @@
-#include "sandbox/service.hpp"
-#include "sandbox/environment.hpp"
+#include "sandbox/application/service.hpp"
+#include "sandbox/platform/environment.hpp"
 #include <cerrno>
 #include <sys/prctl.h>
 #include <sys/syscall.h>

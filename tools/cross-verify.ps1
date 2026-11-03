@@ -47,15 +47,15 @@ function Step([string]$name) { Write-Host "== $name" -ForegroundColor Cyan }
 Step 'portable suites'
 $core = Get-ChildItem (Join-Path $root 'src/core') -Filter *.cpp | ForEach-Object { $_.FullName }
 $suites = [ordered]@{
-    core       = 'tests/core_tests.cpp'
-    wire       = 'tests/wire_tests.cpp'
-    supervisor = 'tests/supervisor_tests.cpp'
-    prepare    = 'tests/prepare_tests.cpp'
-    control    = 'tests/control_tests.cpp'
-    workspace  = 'tests/workspace_tests.cpp'
-    ops_json   = 'tests/ops_json_tests.cpp'
-    fault      = 'tests/fault_tests.cpp'
-    model      = 'tests/model_tests.cpp'
+    core       = 'tests/unit/core_tests.cpp'
+    wire       = 'tests/experimental/wire_tests.cpp'
+    supervisor = 'tests/unit/supervisor_tests.cpp'
+    prepare    = 'tests/unit/prepare_tests.cpp'
+    control    = 'tests/unit/control_tests.cpp'
+    workspace  = 'tests/unit/workspace_tests.cpp'
+    ops_json   = 'tests/unit/ops_json_tests.cpp'
+    fault      = 'tests/unit/fault_tests.cpp'
+    model      = 'tests/unit/model_tests.cpp'
 }
 foreach ($name in $suites.Keys) {
     $extra = if ($name -eq 'model') {
@@ -130,7 +130,7 @@ foreach ($source in @(Get-ChildItem (Join-Path $root 'apps') -Recurse -Filter *.
 # 2.5 Every Linux test must compile too: CMake builds them, so a break here
 # fails a real build even though this script never runs them.
 Step 'linux tests compile'
-foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Filter *.cpp)) {
+foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Recurse -Filter *.cpp)) {
     $object = Join-Path $Build "$($source.BaseName)-test.o"
     & $Zig c++ -target $Target -std=c++20 -O1 -c @includes -o $object $source.FullName
     if ($LASTEXITCODE -ne 0) { Write-Host "FAIL test-compile $($source.Name)" -ForegroundColor Red; $failures++ }
@@ -152,7 +152,7 @@ foreach ($binary in @(
 # 4. Link every test executable. Compiling each test proves it parses; linking
 # proves the symbols it uses still exist after a refactor.
 Step 'linux tests link'
-foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Filter *.cpp)) {
+foreach ($source in @(Get-ChildItem (Join-Path $root 'tests') -Recurse -Filter *.cpp)) {
     $object = Join-Path $Build "$($source.BaseName)-test.o"
     if (-not (Test-Path $object)) { continue }
     & $Zig c++ -target $Target -o (Join-Path $Build "$($source.BaseName)-test") `

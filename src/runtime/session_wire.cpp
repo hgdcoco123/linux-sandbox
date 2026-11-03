@@ -1,5 +1,5 @@
-#include "sandbox/session_wire.hpp"
-#include "sandbox/command_model.hpp"
+#include "sandbox/runtime/session_wire.hpp"
+#include "sandbox/model/command_model.hpp"
 #include "session_v1.pb.h"
 #include <limits>
 namespace sandbox::session_wire {
@@ -295,7 +295,12 @@ Json command_report_to_json(const CommandReport &report) {
         value["exec_errno"] = nullptr;
     if (const char *reason = legacy_stop_reason(outcome))
         value["stop_reason"] = reason;
-    value["execution_ms"] = result.timing.execution.count();
+    // `timing` is microseconds, the field is milliseconds: an 83 ms command used to be
+    // reported as "83000".
+    value["execution_ms"] =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       result.timing.execution)
+                                       .count());
     value["stdout"] = stream_fields(result.out);
     value["stderr"] = stream_fields(result.err);
     if (!known)
@@ -404,14 +409,21 @@ std::string encode_response(std::string_view operation, const Json &answer) {
         auto bytes=answer.at("bytes").get<std::vector<unsigned char>>(); x->set_data(bytes.data(),bytes.size()); x->set_finished(answer.at("finished").get<bool>());
     } else if (operation == "close" || operation == "cancel" || operation == "stdin-close") {
         auto *x=m.mutable_acknowledgement(); if (answer.contains("status")) x->set_status(answer.at("status").get<std::string>());
-        if (answer.contains("active")) x->set_active(answer.at("active").get<bool>()); if (answer.contains("closed")) x->set_closed(answer.at("closed").get<bool>());
+        if (answer.contains("active"))
+            x->set_active(answer.at("active").get<bool>());
+        if (answer.contains("closed"))
+            x->set_closed(answer.at("closed").get<bool>());
     } else if (operation == "files") {
         auto *x=m.mutable_workspace(); x->set_bytes(answer.at("bytes").get<std::uint64_t>()); x->set_entry_count(answer.at("entry_count").get<std::uint64_t>());
         x->set_manifest_truncated(answer.at("manifest_truncated").get<bool>());
         if (answer.contains("complete")) x->set_complete(answer.at("complete").get<bool>());
         if (answer.contains("destination")) x->set_destination(answer.at("destination").get<std::string>());
         for (const auto &item : answer.at("entries")) { auto *e=x->add_entries(); e->set_path(item.at("path").get<std::string>()); e->set_type(item.at("type").get<std::string>());
-            if (item.contains("size")) e->set_size(item.at("size").get<std::uint64_t>()); if (item.contains("sha256")) e->set_sha256(item.at("sha256").get<std::string>()); }
+            if (item.contains("size"))
+                e->set_size(item.at("size").get<std::uint64_t>());
+            if (item.contains("sha256"))
+                e->set_sha256(item.at("sha256").get<std::string>());
+        }
     } else throw SessionError("UNKNOWN_OPERATION", "unsupported response operation");
     return pack(m);
 }
@@ -432,11 +444,19 @@ Json decode_response(std::string_view packet) {
     case pb::SessionResponse::kOutput: { const auto &x=m.output(); return {{"offset",x.offset()},{"next_offset",x.next_offset()},
         {"bytes",std::vector<unsigned char>(x.data().begin(),x.data().end())},{"finished",x.finished()}}; }
     case pb::SessionResponse::kAcknowledgement: { const auto &x=m.acknowledgement(); Json j=Json::object(); if (!x.status().empty()) j["status"]=x.status();
-        if (x.has_active()) j["active"]=x.active(); if (x.has_closed()) j["closed"]=x.closed(); return j; }
+        if (x.has_active())
+            j["active"]=x.active();
+        if (x.has_closed())
+            j["closed"]=x.closed();
+        return j; }
     case pb::SessionResponse::kWorkspace: { const auto &x=m.workspace(); Json entries=Json::array(); for (const auto &e : x.entries()) {
         Json item={{"path",e.path()},{"type",e.type()}}; if (e.has_size()) item["size"]=e.size(); if (e.has_sha256()) item["sha256"]=e.sha256(); entries.push_back(item); }
         Json j={{"bytes",x.bytes()},{"entries",entries},{"entry_count",x.entry_count()},{"manifest_truncated",x.manifest_truncated()}};
-        if (x.has_complete()) j["complete"]=x.complete(); if (x.has_destination()) j["destination"]=x.destination(); return j; }
+        if (x.has_complete())
+            j["complete"]=x.complete();
+        if (x.has_destination())
+            j["destination"]=x.destination();
+        return j; }
     default: throw SessionError("INVALID_RESPONSE", "missing or unsupported response");
     }
 }

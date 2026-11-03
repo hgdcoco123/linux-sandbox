@@ -1,17 +1,20 @@
-#include "sandbox/command_execution.hpp"
+#include "sandbox/runtime/command_execution.hpp"
 #include "sandbox/core/ops_json.hpp"
-#include "sandbox/event_loop.hpp"
-#include "sandbox/interactive.hpp"
-#include "sandbox/isolation.hpp"
-#include "sandbox/session.hpp"
-#include "sandbox/session_policy.hpp"
-#include "sandbox/session_safety.hpp"
-#include "sandbox/session_state.hpp"
+#include "sandbox/platform/event_loop.hpp"
+#include "sandbox/runtime/interactive.hpp"
+#include "sandbox/storage/artifacts.hpp"
+#include "sandbox/isolation/isolation.hpp"
+#include <spdlog/sinks/basic_file_sink.h>
+#include "sandbox/runtime/session.hpp"
+#include "sandbox/runtime/session_policy.hpp"
+#include "sandbox/runtime/session_state.hpp"
 #include "sandbox/core/prepare.hpp"
-#include "sandbox/session_store.hpp"
-#include "sandbox/session_wire.hpp"
-#include "sandbox/snapshot.hpp"
-#include "sandbox/workspace_service.hpp"
+#include "sandbox/storage/session_store.hpp"
+#include "sandbox/runtime/session_wire.hpp"
+#include "sandbox/storage/snapshot.hpp"
+#include <cstdlib>
+#include <cstring>
+#include "sandbox/storage/workspace_service.hpp"
 #include <fcntl.h>
 #include <iostream>
 #include <poll.h>
@@ -24,16 +27,7 @@
 namespace sandbox {
 namespace {
 
-OutputStats stats_of(const StreamReport &report) {
-    OutputStats stats;
-    stats.saved_bytes = report.saved;
-    stats.discarded_bytes = report.discarded;
-    stats.failed_bytes = report.failed_bytes;
-    stats.queue_peak_bytes = report.queue_peak_bytes;
-    stats.backpressure_events = report.backpressure_events;
-    stats.write_error = report.write_error;
-    return stats;
-}
+
 // The command's own budget. Grace is deliberately the same backstop the session
 // already used (wall + grace + 5000): for a session, killing the group is not a
 // per-command operation, so the core must not escalate before init has had its
@@ -81,11 +75,34 @@ class SessionController {
     fs::path transfer_;
     std::uint64_t export_sequence_ = 0;
     bool export_attempted_ = false, export_ok_ = false;
+    // Visibility and durability are separate facts: a published tree that could not be
+    // synced is visible now but may come back as the old one after a crash.
+    bool export_durable_ = false;
+    std::string export_durability_error_;
+    // Where the previous host copy was left when durability could not be confirmed.
+    fs::path export_retained_previous_;
     bool export_pending_ = false;
+    // One transfer outstanding at a time. A transfer that timed out leaves its copy
+    // running inside the sandbox, so the channel is not reusable until that request
+    // answers - and a late answer must not be read as the answer to a new one.
+    std::uint64_t transfer_sequence_ = 0;
+    bool transfer_unusable_ = false;
+    std::string transfer_quarantine_reason_;
+    bool stale_reply_seen_ = false;
+    // Waiting for a copy must not make the supervisor deaf: the signal source is kept
+    // so a stop request can be forwarded to the copy itself (init aborts on STOP), and
+    // remembered so the outer loop still closes the session once the wait unwinds.
+    SignalSource *signals_ = nullptr;
+    bool signal_pending_ = false;
+    bool stop_during_transfer_ = false;
     std::uint64_t export_bytes_ = 0;
     std::uint32_t export_entries_ = 0;
     std::string export_error_;
     SessionLifecycle lifecycle_;
+    // A session used to leave only result.json behind, which says nothing about the
+    // order of channel events; every diagnosis cost a full reproduction. Same file a
+    // single run writes, same rules: info for the sequence, warn for what went wrong.
+    std::shared_ptr<spdlog::logger> logger_;
     Json last_ = nullptr;
     // The live summary of the command in flight. Once it is finished the durable
     // record is the answer instead, so this never claims a terminal state.
@@ -154,11 +171,40 @@ class SessionController {
     // A report about the command running right now is answered from the live
     // summary: storage only knows what was written, and a replay must not claim
     // "uncertain" about a command the caller can still talk to.
-    // A dead sandbox must be reported, not blocked on: every transfer waits with a
-    // deadline and turns a closed channel into an explicit failure.
-    Transferred await_transfer() {
-        const auto deadline = monotonic_ms() + 30000;
+    // An interrupted copy really did stop, so the channel is still usable - unlike a
+    // timeout, where the copy may be running. The distinction is carried by init's
+    // answer as a typed reason (`TransferStop`).
+    // One transfer at a time, and a transfer that timed out poisons the channel: the
+    // copy inside the sandbox may still be running, so a new request could be
+    // answered by the *old* reply. A late answer is recognised by its sequence and
+    // discarded; until it arrives, transfers fail fast instead of guessing.
+    Transferred await_transfer(std::uint64_t sequence) {
+        const auto deadline = monotonic_ms() + transfer_wait_ms();
         for (;;) {
+            // The copy runs inside the sandbox while the supervisor waits here. Waiting
+            // must not make it deaf: a stop request is forwarded as STOP, which is what
+            // makes init abort the copy (InterruptOnStop) instead of finishing it for
+            // nobody. The request is remembered because draining the signal consumes it;
+            // the outer loop still has to close the session afterwards.
+            if (signals_ && signals_->drain_cancel()) {
+                signal_pending_ = true;
+                stop_during_transfer_ = true;
+                try {
+                    if (init_open_)
+                        launcher_->init_channel().send(Stop{});
+                } catch (const std::exception &) {
+                    // init is already gone; there is nothing left to abort.
+                }
+            }
+            const auto now = monotonic_ms();
+            if (closed_ != 0 && now - closed_ > config_.limits.grace_ms + 5000) {
+                // The close deadline does not pause while a copy runs: the session has
+                // promised to be gone by then, and a copy may still be running.
+                transfer_unusable_ = true;
+                transfer_quarantine_reason_ =
+                    "the session close deadline expired while the sandbox was copying";
+                throw SessionError("TRANSFER_TIMEOUT", transfer_quarantine_reason_);
+            }
             std::optional<ControlEnvelope> frame;
             try {
                 frame = launcher_->init_channel().receive(true);
@@ -167,17 +213,51 @@ class SessionController {
                 throw SessionError("TRANSFER_FAILED", "the sandbox exited during the transfer");
             }
             if (frame) {
-                if (auto *answer = std::get_if<Transferred>(&frame->message))
+                if (auto *answer = std::get_if<Transferred>(&frame->message)) {
+                    if (answer->sequence != sequence) {
+                        // This is the answer to an abandoned request. Forget the
+                        // quarantine it caused and keep waiting for our own.
+                        if (!stale_reply_seen_) {
+                            stale_reply_seen_ = true;
+                            errors_.push_back("stale transfer reply discarded (sequence " +
+                                              std::to_string(answer->sequence) + ")");
+                        }
+                        continue;
+                    }
                     return *answer;
+                }
                 throw SessionError("TRANSFER_FAILED", "unexpected message from the sandbox");
             }
             if (!init_open_)
                 throw SessionError("TRANSFER_FAILED", "the sandbox exited during the transfer");
-            if (monotonic_ms() >= deadline)
-                throw SessionError("TRANSFER_FAILED", "the sandbox did not answer the transfer");
+            if (now >= deadline) {
+                // The copy may still be running inside the sandbox, so the channel is
+                // not reusable: from here on every transfer fails fast.
+                transfer_unusable_ = true;
+                transfer_quarantine_reason_ =
+                    "a previous transfer timed out; the sandbox may still be copying";
+                throw SessionError("TRANSFER_TIMEOUT",
+                                   "the sandbox did not answer within " +
+                                       std::to_string(transfer_wait_ms()) +
+                                       "ms; the copy may still be running");
+            }
             pollfd wait{launcher_->init_channel().fd(), POLLIN, 0};
             ::poll(&wait, 1, 20);
         }
+    }
+    // Tests need the timeout, so it is adjustable; production keeps a generous
+    // default because a large workspace legitimately takes a while to copy.
+    static std::uint64_t transfer_wait_ms() {
+        if (const char *configured = ::getenv("SBX_TRANSFER_WAIT_MS")) {
+            char *end = nullptr;
+            const auto value = std::strtoull(configured, &end, 10);
+            // Zero is meaningful: it gives the sandbox no time at all, which is how
+            // the timeout path is tested without depending on how fast a copy is.
+            // Anything that is not a plain number keeps the production default.
+            if (end && *end == '\0' && end != configured)
+                return value;
+        }
+        return 30000;
     }
     // Ask the sandbox for its workspace and publish what it hands over. Only legal
     // with no command running: the core's completion is what proves the target and
@@ -188,55 +268,79 @@ class SessionController {
         if (!current().is_null())
             throw SessionError("SESSION_BUSY",
                                "the workspace cannot be read while a command runs");
-        const auto tag = "out-" + std::to_string(++export_sequence_);
-        // The reported facts describe the *last* attempt: an earlier success must
-        // never be able to make a later failure look delivered.
+        if (transfer_unusable_)
+            throw SessionError("TRANSFER_UNUSABLE", transfer_quarantine_reason_);
+        const auto sequence = ++transfer_sequence_;
+        const auto tag = "out-" + std::to_string(sequence);
         export_attempted_ = true;
         export_ok_ = false;
         export_error_.clear();
+        export_durable_ = false;
+        export_durability_error_.clear();
+        export_retained_previous_.clear();
         export_bytes_ = 0;
         export_entries_ = 0;
         std::error_code failure;
         fs::remove_all(transfer_ / tag, failure);
-        launcher_->init_channel().send(ExportTree{tag});
-        auto answer = await_transfer();
+        launcher_->init_channel().send(ExportTree{tag, sequence});
+        Transferred answer;
+        try {
+            answer = await_transfer(sequence);
+        } catch (const std::exception &failure) {
+            export_error_ = failure.what();
+            throw;
+        }
         if (!answer.ok) {
             export_error_ = answer.error;
-            throw SessionError("EXPORT_FAILED", answer.error);
+            // No quarantine here: an interrupted copy stopped, so the next transfer may
+            // use the channel. Only a timeout leaves a copy running.
+            throw SessionError(
+                answer.stop == TransferStop::interrupted ? "TRANSFER_INTERRUPTED" : "EXPORT_FAILED",
+                answer.error);
         }
         export_bytes_ = answer.bytes;
         export_entries_ = answer.entries;
-        // Publish only once the whole tree arrived: a partial export never replaces
-        // the last good copy.
-        auto published = store_->directory() / "workspace";
-        fs::remove_all(published, failure);
-        if (failure) {
+        // Publish through the same implementation the single run uses: exchange, durable
+        // swap, reclaim the previous copy (see publish_tree_over). The previous good
+        // copy stays in place until the swap actually happens.
+        try {
+            auto outcome =
+                publish_tree_over(transfer_ / tag, store_->directory() / "workspace",
+                                  config_.workspace);
+            export_ok_ = true;
+            // Visibility and durability are reported separately: a published tree that
+            // could not be synced is visible now but may come back as the old one after
+            // a crash, and the previous copy was deliberately kept for that case.
+            export_durable_ = outcome.durability_confirmed;
+            export_durability_error_ = outcome.durability_error;
+            export_retained_previous_ = outcome.retained_previous_path;
+            if (!outcome.cleanup_error.empty())
+                errors_.push_back(outcome.cleanup_error);
+        } catch (const std::exception &e) {
             export_ok_ = false;
-            export_error_ = "publish: " + failure.message();
+            export_error_ = e.what();
             throw SessionError("EXPORT_FAILED", export_error_);
         }
-        fs::rename(transfer_ / tag, published, failure);
-        if (failure) {
-            export_error_ = "publish: " + failure.message();
-            throw SessionError("EXPORT_FAILED", export_error_);
-        }
-        export_ok_ = true;
     }
     // Hand one staged upload to the sandbox, then publish the same tree as the host
     // copy of it.
     void import_workspace(const std::string &name) {
         if (!quota_workspace_ || !launcher_)
             throw SessionError("TRANSFER_FAILED", "workspace transfer is not configured");
-        launcher_->init_channel().send(ImportTree{name});
-        auto answer = await_transfer();
+        if (transfer_unusable_)
+            throw SessionError("TRANSFER_UNUSABLE", transfer_quarantine_reason_);
+        const auto sequence = ++transfer_sequence_;
+        launcher_->init_channel().send(ImportTree{name, sequence});
+        auto answer = await_transfer(sequence);
         if (!answer.ok)
-            throw SessionError("IMPORT_FAILED", answer.error);
+            throw SessionError(
+                answer.stop == TransferStop::interrupted ? "TRANSFER_INTERRUPTED" : "IMPORT_FAILED",
+                answer.error);
         std::error_code failure;
         fs::rename(transfer_ / "in" / name, store_->directory() / "workspace" / name, failure);
         if (failure)
             throw SessionError("IMPORT_FAILED", "publish upload: " + failure.message());
-    }
-    Json command_reply(const CommandReport &report) const {
+    }    Json command_reply(const CommandReport &report) const {
         const auto live = current();
         if (!report.finished && live.is_object() &&
             live.value("command_id", "") == report.accepted.index.str())
@@ -310,6 +414,8 @@ class SessionController {
         lifecycle_.transition(SessionState::closing);
         closed_ = monotonic_ms();
         reason_ = reason;
+        if (logger_)
+            logger_->info("close: reason={} stopping={}", reason, lifecycle_.stopping());
         if (execution_)
             execution_->input.write.reset();
         // The workspace is handed over while init is still alive: a tmpfs dies with
@@ -317,7 +423,14 @@ class SessionController {
         // running the tree cannot be read, which is reported rather than silently
         // dropping the artifacts.
         if (quota_workspace_) {
-            if (current().is_null()) {
+            if (!current().is_null()) {
+                // A command is still running: the tree cannot be read yet. Hand it
+                // over as soon as init reports it finished, before init exits.
+                export_pending_ = true;
+            } else if (!stop_during_transfer_) {
+                // A stop forwarded during a transfer ends init by design, so there is
+                // no environment left to read a workspace from - and asking again would
+                // report a second failure for the same stop.
                 try {
                     sync_workspace();
                 } catch (const std::exception &e) {
@@ -325,14 +438,15 @@ class SessionController {
                     if (config_.workspace.keep_on_close)
                         errors_.push_back(std::string("workspace export: ") + e.what());
                 }
-            } else {
-                // A command is still running: the tree cannot be read yet. Hand it
-                // over as soon as init reports it finished, before init exits.
-                export_pending_ = true;
             }
         }
-        if (launcher_ && init_open_)
-            launcher_->init_channel().send(Stop{});
+        if (launcher_ && init_open_) {
+            try {
+                launcher_->init_channel().send(Stop{});
+            } catch (const std::exception &) {
+                // init is already gone; there is nothing left to stop.
+            }
+        }
         persist();
     }
     Json start(const ExecutionRequest &intent) {
@@ -365,7 +479,7 @@ class SessionController {
         // prepared, so this command starts directly in the running phase.
         prepared->core = std::make_unique<ExecutionCore>(command_limits(command),
                                                          Millis{static_cast<std::int64_t>(started)});
-        prepared->core->result().security = security_policy_id(config_);
+        prepared->core->set_security(security_policy_id(config_));
         // Durable acceptance is the boundary after which this request cannot be rerun.
         records_->accept(*prepared->accepted);
         execution_ = std::move(prepared);
@@ -482,6 +596,9 @@ class SessionController {
             request.operation());
     }
     void event(ControlEnvelope envelope, bool parent) {
+        if (logger_)
+            logger_->info("event: {} from {}", control_kind_name(kind_of(envelope.message)),
+                          parent ? "launcher" : "init");
         if (parent) {
             if (auto *created = std::get_if<InitCreated>(&envelope.message)) {
                 auto pid = created->pid;
@@ -497,6 +614,15 @@ class SessionController {
                 }
                 launcher_->init_channel().send(lifecycle_.stopping() ? ControlMessage{Stop{}}
                                                                   : ControlMessage{Prepare{}});
+                // The transfer directory goes over as a descriptor, not a mount and not
+                // a path: the sandbox can copy through it without being able to name it,
+                // and nothing of it appears in the target's filesystem.
+                if (!lifecycle_.stopping() && quota_workspace_) {
+                    int transfer = checked(::open(transfer_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC),
+                                           "open transfer directory");
+                    launcher_->init_channel().send(TransferChannel{}, transfer);
+                    ::close(transfer);
+                }
             } else if (auto *reaped = std::get_if<InitReaped>(&envelope.message)) {
                 reaped_ = true;
                 int status = reaped->wait_status;
@@ -559,6 +685,17 @@ class SessionController {
                 throw std::runtime_error("init: " + error->message);
             } else if (std::holds_alternative<InitDone>(envelope.message)) {
                 done_ = true;
+            } else if (auto *late = std::get_if<Transferred>(&envelope.message)) {
+                // The answer to a request whose wait was abandoned (a timeout leaves the
+                // copy running, so it arrives later). The design promises late answers
+                // are discarded by sequence - this is where that promise is kept: the
+                // main loop is the only reader left once await_transfer() has given up,
+                // and treating one as a protocol error killed a healthy session.
+                if (!stale_reply_seen_) {
+                    stale_reply_seen_ = true;
+                    errors_.push_back("stale transfer reply discarded (sequence " +
+                                      std::to_string(late->sequence) + ")");
+                }
             } else {
                 throw std::runtime_error("init failed: unexpected message");
             }
@@ -580,8 +717,23 @@ class SessionController {
                 } catch (const ChannelClosed &) {
                     open = false;
                     channel.close();
-                    if (!(parent ? reaped_ : done_))
-                        throw;
+                    if (logger_)
+                        logger_->warn("channel closed: parent={} reaped={} done={} stopping={} "
+                                      "quarantined={} signal_pending={}",
+                                      parent, reaped_, done_, lifecycle_.stopping(),
+                                      transfer_unusable_, signal_pending_);
+                    if (!(parent ? reaped_ : done_)) {
+                        // During a stop the peer exiting is expected - init can be gone
+                        // before its INIT_DONE is read, and a close with a STOP still unread
+                        // resets the connection and discards that frame. A closed channel
+                        // then ends the evidence; it does not make a deliberate close a
+                        // failure. Outside a stop the missing fact still means the session
+                        // broke, which is what the throw reports.
+                        if (!lifecycle_.stopping())
+                            throw;
+                        if (!parent)
+                            done_ = true;
+                    }
                     break;
                 }
             }
@@ -594,6 +746,7 @@ class SessionController {
     Json run() {
         ensure_standard_fds();
         SignalSource signals;
+        signals_ = &signals;
         EventLoop loop;
         TickSource ticks;
         struct PipeSignalGuard {
@@ -617,6 +770,12 @@ class SessionController {
         store_ = RunStore::create(root_, config_);
         store_->owner_update({{"persistent", true}});
         records_ = std::make_unique<SessionStore>(*store_);
+        logger_ = std::make_shared<spdlog::logger>(
+            store_->id(), std::make_shared<spdlog::sinks::basic_file_sink_st>(
+                              (store_->directory() / "internal.log").string(), false));
+        logger_->set_pattern("[%H:%M:%S.%e] [%l] %v");
+        logger_->flush_on(spdlog::level::warn);
+        logger_->info("session opened: mode={} quota_workspace={}", config_.mode, quota_workspace_);
 
         try {
             // Preparation is journaled exactly like a single run: a step that already
@@ -628,19 +787,21 @@ class SessionController {
             steps.push_back({PrepareStep::state_root,
                              [this] {
                                  rootfs_ = store_->directory() / "rootfs";
-                                 checked(::mkdir(rootfs_.c_str(), 0700), "create session rootfs");
                                  auto workspace = store_->directory() / "workspace";
-                                 checked(::mkdir(workspace.c_str(), 0700), "create workspace");
+                                 // Quota workspace: the target writes to a tmpfs the
+                                 // supervisor cannot see, so the run directory keeps a
+                                 // transfer staging area (handed to the sandbox as a
+                                 // descriptor) and the published copy.
+                                 std::vector<fs::path> layout{rootfs_, workspace};
                                  if (config_.mode == "isolated") {
-                                     // Quota workspace: the target writes to a tmpfs the
-                                     // supervisor cannot see, so the run directory keeps the
-                                     // transfer mount and the published copy instead of
-                                     // binding the workspace itself.
                                      transfer_ = store_->directory() / "transfer";
-                                     checked(::mkdir(transfer_.c_str(), 0700),
-                                             "create transfer directory");
-                                     checked(::mkdir((transfer_ / "in").c_str(), 0700),
-                                             "create transfer inbox");
+                                     layout.push_back(transfer_);
+                                     layout.push_back(transfer_ / "in");
+                                 }
+                                 // One transaction: if any of them cannot be created,
+                                 // only what this call created is removed again.
+                                 create_directories_or_remove(layout);
+                                 if (config_.mode == "isolated") {
                                      config_.workspace_transfer = transfer_;
                                      quota_workspace_ = true;
                                  }
@@ -656,21 +817,16 @@ class SessionController {
                                      workspace, *records_, config_.workspace, std::move(hooks));
                              },
                              [this] {
-                                 std::error_code failure;
-                                 fs::remove_all(rootfs_, failure);
-                                 if (failure)
-                                     throw std::runtime_error("rootfs: " + failure.message());
-                                 fs::remove_all(store_->directory() / "workspace", failure);
-                                 if (failure)
-                                     throw std::runtime_error("workspace: " + failure.message());
-                                 if (!transfer_.empty()) {
-                                     fs::remove_all(transfer_, failure);
-                                     if (failure)
-                                         throw std::runtime_error("transfer: " + failure.message());
-                                     transfer_.clear();
-                                     quota_workspace_ = false;
-                                     config_.workspace_transfer.clear();
-                                 }
+                                 // Every directory gets an attempt: one removal that fails
+                                 // must not stop the others, the same rule the journal uses
+                                 // for rollback. All failures are reported together.
+                                 auto failures = remove_all_collect(
+                                     {rootfs_, store_->directory() / "workspace", transfer_});
+                                 if (!failures.empty())
+                                     throw std::runtime_error(failures);
+                                 transfer_.clear();
+                                 quota_workspace_ = false;
+                                 config_.workspace_transfer.clear();
                              }});
             steps.push_back({PrepareStep::control_socket,
                              [this] {
@@ -705,13 +861,13 @@ class SessionController {
                 {PrepareStep::input_snapshot,
                  [this] { input_snapshots_ = snapshot_inputs(config_, store_->directory()); },
                  [this] {
-                     for (const auto &directory : input_snapshots_) {
-                         std::error_code failure;
-                         fs::remove_all(directory, failure);
-                         if (failure)
-                             throw std::runtime_error("input snapshot: " + failure.message());
-                     }
+                     // Same rule as state_root: a snapshot that cannot be removed does
+                     // not stop the other ones from being removed.
+                     auto failures = remove_all_collect(
+                         std::vector<fs::path>(input_snapshots_.begin(), input_snapshots_.end()));
                      input_snapshots_.clear();
+                     if (!failures.empty())
+                         throw std::runtime_error(failures);
                  }});
             steps.push_back({PrepareStep::launcher,
                              [this] {
@@ -780,8 +936,18 @@ class SessionController {
                     observe_core(execution_->core->tick(
                         Millis{static_cast<std::int64_t>(monotonic_ms())}));
                 auto now = monotonic_ms();
-                if (signals.drain_cancel())
+                // A signal consumed while waiting for a transfer is still a stop
+                // request: the wait drained it, so the flag carries it to here.
+                bool cancelled = signals.drain_cancel();
+                if (signal_pending_) {
+                    signal_pending_ = false;
+                    cancelled = true;
+                }
+                if (cancelled) {
+                    if (logger_)
+                        logger_->info("signal: closing the session");
                     close("signal");
+                }
                 if (!lifecycle_.stopping() && now - created_ >= config_.session_ms)
                     close("session_timeout");
                 if (!lifecycle_.stopping() && lifecycle_.state() == SessionState::preparing &&
@@ -906,7 +1072,12 @@ class SessionController {
               {"ok", export_ok_},
               {"bytes", export_bytes_},
               {"entries", export_entries_},
-              {"error", export_error_}}}};
+              {"error", export_error_},
+              // Only meaningful once `ok` is true: whether the visible copy is also on
+              // stable storage (a crash may otherwise bring back the previous one).
+              {"durable", export_durable_},
+              {"durability_error", export_durability_error_},
+              {"retained_previous_path", export_retained_previous_.string()}}}};
         result["stop_reason"] = reason_;
         result["errors"] = errors_;
         if (!prepare_rollback_failures_.empty()) {
@@ -941,6 +1112,10 @@ class SessionController {
         records_->close(result);
         execution_.reset();
         server_.reset();
+        if (logger_) {
+            logger_->info("session finished: stop_reason={} export_ok={}", reason_, export_ok_);
+            logger_->flush();
+        }
         return result;
     }
 };

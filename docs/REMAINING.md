@@ -41,12 +41,12 @@
 `resolve_command`、`SessionStore::replay`、`CommandRecord` 都绑定在
 `ExecuteRequest`/`CommandId` 上：
 
-- `include/sandbox/command_model.hpp`（`RequestId`/`CommandId`/`CommandFacts`/`CommandRecord`）
-- `include/sandbox/session_protocol.hpp`（`validate_session_request`、`SessionError`）
+- `include/sandbox/model/command_model.hpp`（`RequestId`/`CommandId`/`CommandFacts`/`CommandRecord`）
+- `include/sandbox/runtime/session_protocol.hpp`（`validate_session_request`、`SessionError`）
 - `src/runtime/interactive_session.cpp`（`handle(Json)`、`start(ExecuteRequest)`）
 - `src/storage/session_store.cpp`（`replay`/`accept`/`find_request` 的 JSON 语义）
 - `sdk/session_client.py`、`sdk/session_wire.py`（客户端协议）
-- `tests/sessions.py`、`session_sdk_tests.py`、`session_contract_tests.cpp`
+- `tests/integration/sessions.py`、`session_sdk_tests.py`、`session_contract_tests.cpp`
 
 建议顺序：先把 `SessionStore` 迁到 `core/record` 的类型化记录（请求/终态），再换
 `handle`，最后改 SDK。迁移的红线是 `same_intent()` 的判等语义与已落盘请求的可解析性。
@@ -84,16 +84,53 @@
   所以数据经 `/transfer` 双向移交：上传先暂存再由沙箱取走，读取（manifest/export/关闭时保留）
   先让沙箱交出整棵树再原子发布；移交失败会记进 `workspace.export` 与 `errors`，`keep_on_close`
   时不会报成功。四类用例（容量耗尽、inode 耗尽、导出失败、init 中途被杀）在
-  `tests/workspace_quota.py`，随 `tools/isolated-accept.sh` 一起跑，跳过即判失败。
+  `tests/acceptance/workspace_quota.py`，随 `tools/isolated-accept.sh` 一起跑，跳过即判失败。
 - **runtime 布局新增 `transfer` 占位目录**：工作区挂载点在 runtime 里，因为 runtime 在装挂载前
   已被递归设为只读。旧 runtime 需要用 `tools/make_runtime.py` 重新生成。
-- **seccomp 的 runtime 专用策略（未实现）**：当前是 `SCMP_ACT_ALLOW` + 拒绝列表的兼容型策略，
-  结果里只记录了策略名与规则集版本。针对明确支持的 runtime 做经测试的 allowlist 是独立工程
-  （需要对该 runtime 的 syscall 集合做 profiling 并用隔离环境验收），不是重构能顺带完成的。
+- **P1 已修：传输通道 fd 化**。宿主传输目录不再挂进沙箱，而是随 `TransferChannel` 消息以
+  **一个描述符** 交给 init，复制用 `export_workspace()`/`import_workspace()` 以 `*at` 系统
+  调用完成（`publish_tree` 复用同一个 `walk()`，符号链接/硬链接/特殊文件的拒绝与边读边校验
+  原样保留）。因此 `/transfer` 在沙箱文件系统里**不存在**，目标既不能写它绕过配额，也无法
+  干扰暂存数据；`transfer-probe` 已从 `KNOWN GAP` 转为**硬断言**。
+  另附传输时序：单在途 + 序号回显 + 超时作废通道（迟到回执按序号丢弃），
+  超时上限可用 `SBX_TRANSFER_WAIT_MS` 调整；**`0` 表示"完全不给时间"**，用来让超时路径
+  确定性地发生（非数字值仍回落到默认 30000）。
+  **已端到端验证**：`bash tools/isolated-accept.sh` 全绿（七条成功行含
+  `a timed-out transfer is reported and the channel is quarantined`），
+  宿主传输目录在沙箱内不可达、发布为原子交换、超时后通道作废均已实测。- **导出阻塞控制通道：已定方案，待实现**。现在复制在 init 的控制循环里同步跑，超时只能作废
+  通道、不能停复制。实现路径（不需要额外进程）：
+  1. `walk()` 加一个 `const std::function<bool()> &interrupted`，每处理一个条目检查一次，
+     为真时抛 `TransferAborted`（内部异常类型，与"复制失败"区分开）；
+  2. `publish_tree` / `export_workspace` / `import_workspace` 透传该回调，签名与 `publish_tests`
+     同步更新；
+  3. init 的 transfer 处理器传入一个 lambda：`control.receive(true)` 非阻塞读一帧，若是 `Stop`
+     或 `CancelCommand` 则记录"已请求停止"并返回真；处理器随后回 `Transferred{ok=false,
+     error="interrupted by stop"}`，循环再按已记录的停止请求收尾；
+  4. 监督端收到 `ok=false` + 该错误文本时记 `TRANSFER_INTERRUPTED`，**不作废通道**（复制确实停了，
+     这是它与超时的本质区别）。
+  验收：`publish_tests` 增加"复制到一半中止 → 抛 `TransferAborted` 且什么都没发布"。- **`core/wire.cpp` 的去留：保留，但要说清它是什么**。已核实：只有 `wire_tests` 与 `fault_tests`
+  引用它，**运行期没有任何消费者**（真实的回包路径是 `session_wire` 的 Protobuf 编解码）。
+  `REDESIGN.md` 把它写成"若要求内部也用 protobuf，替换点只有这一个文件"，所以它不是被遗忘的
+  死代码，而是**被保留的设计替换点**。代价是那两组测试覆盖的是没人运行的代码——因此这里明确
+  记录，避免有人把"wire 测试通过"当成"回包路径被覆盖"。
+- **编译警告已清零（含测试）**：干净重编 `build-warn` 从 33 条降到 **0**。生产代码的两类
+  （`decltype(&::closedir)` 的 `-Wignored-attributes`、4 处 `-Wmisleading-indentation`）已改代码；
+  测试中间刻意忽略 `[[nodiscard]]` 的 28 条用**目标级** `-Wno-unused-result` 关掉。
+  注意这条经验：编译选项必须加在**目标已定义之后**——之前把它放进文件顶部的列表里，
+  静默无效，警告一条没少。
+- **单次执行与批量任务的磁盘配额：已实现（决策 A）**。语义：隔离模式下 `/output` 一律是
+  tmpfs（配额与会话一致），`config.mounts[target=/output].source` 的含义从"工作区本身"变为
+  **最后一次导出落地的目录**；批量任务的子进程就是 `sandbox run`，因此自动继承（批次按子运行的
+  `verdict` 判定，"产物未交付"会让任务失败）。实现落在 `run_session`（transfer 目录、`TransferChannel`
+  fd、`Transferred` 与原子发布、等导出答案的预算）、`init::run_once`（收 fd、`export_workspace("final")`）、
+  `rootfs`（有 transfer 时不 bind `/output`）与报告新增的 `workspace{export{attempted,ok,bytes,entries,error}}`
+  （报告 schema 2）。用例：`tests/acceptance/isolation.py` 的单次配额与"导出被拒绝"两条，随
+  `tools/isolated-accept.sh` 必检。**改动后必须重跑隔离验收**：本机 ctest 只能证明宿主侧逻辑。
+  细节见 [HANDOFF](HANDOFF.md) §4.7 与 [HANDOFF_QUOTA](HANDOFF_QUOTA.md)。
 - **会话准备已接 `PrepareSequence`**（本轮完成）：步骤 = state_root / control_socket / cgroup /
   input_snapshot / launcher，失败按逆序撤销；`errors` 里保留原始失败原因（`preparation failed
   at <step>: <reason> (undone: …)`），回滚失败单独进 `cleanup_errors`（`rollback <stage>: …`），
-  `stop_reason` 用 `prepare_failed` 与运行期失败区分。`tests/session_prepare.py` 注入两个失败点
+  `stop_reason` 用 `prepare_failed` 与运行期失败区分。`tests/integration/session_prepare.py` 注入两个失败点
   （末步 launcher、中间步 cgroup）验证这三件事。
 - P7 批次接入执行核心（**已定为范围外**：批次属于多运行编排；做的话按"子运行落
   `FinishedCommand` 记录、批次解码记录而非匹配 `summary` 字符串"的方式）

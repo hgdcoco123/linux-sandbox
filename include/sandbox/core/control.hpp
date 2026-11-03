@@ -52,6 +52,9 @@ enum class ControlKind : std::uint8_t {
     import_tree = 19,
     export_tree = 20,
     transferred = 21,
+    // The host directory that transfer uses, passed once as a descriptor. The
+    // sandbox never sees it as a path, so a target cannot reach it at all.
+    transfer_channel = 22,
 };
 
 // Why a session command ended, as reported by the pid-1 process.
@@ -88,6 +91,10 @@ struct BootstrapError {
     std::string message;
 };
 struct Prepare {};
+// Sent once, right after PREPARE, when the run has a workspace transfer. The
+// descriptor is the host transfer directory: everything the sandbox copies in or
+// out goes through *at() calls on it.
+struct TransferChannel {};
 struct Exec {};
 struct Stop {};
 struct CancelCommand {};
@@ -135,25 +142,37 @@ struct CommandDone {
 // component: the destination is always /output/<name>.
 struct ImportTree {
     std::string name;
+    // Echoed back in TRANSFERRED so a late answer to an abandoned request can be
+    // recognised instead of being read as the answer to the current one.
+    std::uint64_t sequence = 0;
 };
-// Copy the whole sandbox workspace out to /transfer/<tag>. The tag names a
+// Copy the whole sandbox workspace out to <tag> inside the transfer descriptor.
+// The tag names a
 // destination that must not already exist, so a failed export never overwrites a
 // previous good copy.
 struct ExportTree {
     std::string tag;
+    std::uint64_t sequence = 0;
 };
+// Why a transfer ended before it finished. A value, not a sentence: the supervisor has
+// to tell "the copy really stopped, the channel is still usable" from "the copy may
+// still be running" (a timeout), and matching error text made that depend on wording.
+enum class TransferStop : std::uint8_t { none = 0, interrupted = 1 };
+const char *transfer_stop_name(TransferStop) noexcept;
 // The answer to either request. `ok` is about the copy, not about the run: a
 // failed export is reported here and must not be mistaken for a failed target.
 struct Transferred {
     bool ok = false;
+    TransferStop stop = TransferStop::none;
     std::string error;
     std::uint64_t bytes = 0;
     std::uint32_t entries = 0;
+    std::uint64_t sequence = 0;
 };
 
-using ControlMessage = std::variant<InitCreated, InitReaped, BootstrapError, Prepare, Exec, Stop,
-                                    CancelCommand, StdinHandle, StdoutHandle, StderrHandle, Command, EnvReady,
-                                    ExecObserved, StartFailed, MainExit, InitDone, InitError,
+using ControlMessage = std::variant<InitCreated, InitReaped, BootstrapError, Prepare, TransferChannel, Exec,
+                                    Stop, CancelCommand, StdinHandle, StdoutHandle, StderrHandle, Command,
+                                    EnvReady, ExecObserved, StartFailed, MainExit, InitDone, InitError,
                                     CommandDone, ImportTree, ExportTree, Transferred>;
 
 [[nodiscard]] ControlKind kind_of(const ControlMessage &) noexcept;

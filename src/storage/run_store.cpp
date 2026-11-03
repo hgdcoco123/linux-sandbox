@@ -1,8 +1,8 @@
-#include "sandbox/cgroup.hpp"
+#include "sandbox/resources/cgroup.hpp"
 #include "sandbox/core/ops_json.hpp"
-#include "sandbox/session_store.hpp"
-#include "sandbox/session_wire.hpp"
-#include "sandbox/store.hpp"
+#include "sandbox/storage/session_store.hpp"
+#include "sandbox/runtime/session_wire.hpp"
+#include "sandbox/storage/store.hpp"
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
