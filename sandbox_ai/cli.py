@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 from .evidence import collect
@@ -56,7 +57,29 @@ def parser():
     verify.add_argument('--results', type=Path, required=True)
     demo = sub.add_parser('demo', help='Synthetic fixtures and deterministic model; no Linux or API calls')
     demo.add_argument('--output', type=Path, required=True, help='New directory')
+    sub.add_parser('stats', help='Aggregate the recorded analyses of this scope')
     return p
+
+
+def stats(store, scope):
+    """Pass rates over what was actually recorded, not over what the docs claim."""
+    runs = store.analyses(scope)
+    completed = [run for run in runs if run.get('status') == 'completed']
+    metrics = [run.get('metrics') or {} for run in runs]
+    def total(key):
+        return sum(m.get(key) or 0 for m in metrics)
+    def rate(count, size):
+        return round(count / size, 3) if size else None
+    return dict(scope=scope, analyses=len(runs), completed=len(completed),
+                structured_output_rate=rate(len(completed), len(runs)),
+                repairs=total('repairs'), citations=total('citations'),
+                tool_calls=total('tool_calls'), tool_denied=total('tool_denied'),
+                semantic_degraded=sum(1 for m in metrics if m.get('semantic_degraded')),
+                cache_hits=sum(1 for m in metrics if m.get('cache_hit')),
+                retrieval_modes=sorted({m.get('retrieval') for m in metrics if m.get('retrieval')}),
+                average_citations=round(total('citations') / len(completed), 2) if completed else None,
+                verifications=len(store.db.execute(
+                    'SELECT 1 FROM verifications WHERE scope=?', (scope,)).fetchall()))
 
 
 def demo(store, scope, output):
@@ -119,11 +142,13 @@ def main(argv=None):
         elif args.command == 'verify':
             result = execute(store, args.scope, args.analysis_id, args.proposal_id,
                              Templates(args.templates), args.binary, args.results)
+        elif args.command == 'stats':
+            result = stats(store, args.scope)
         else:
             result = demo(store, args.scope, args.output)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 2 if isinstance(result, dict) and result.get('status') == 'failed' else 0
-    except (AnalysisError, OSError, ValueError, KeyError) as error:
+    except (AnalysisError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(json.dumps({'status': 'error', 'error': str(error)}, ensure_ascii=False), file=sys.stderr)
         return 2
     finally:

@@ -5,12 +5,15 @@
 本层面向运行记录和产物，不依赖题目、学生或答案字段。支持：
 
 - 完成的单次执行 RunReport、持续会话单条命令 core record 的证据适配。
-- 运行事实、stdout/stderr、源码及文本/JSON/CSV产物快照；来源位置和内容摘要。
-- 结构化生成，事实与假设分开；证据ID和原文引用校验，一次格式修复机会。
-- BM25关键词检索；可选真实embedding、余弦检索、RRF融合和RAG。
-- 原生function calling：读取证据、搜索其他运行、提出验证模板。
-- 有界多轮上下文、内容和模型版本相关的缓存、审计记录。
-- 显式执行已登记的隔离验证模板，导入新证据，再在原对话追问。
+- 运行事实、stdout/stderr、`internal.log` 生命周期日志、源码及文本/JSON/CSV产物快照；
+  来源位置和内容摘要。
+- 结构化生成，事实与假设分开；证据ID和原文引用（≥8字符）校验，一次格式修复机会。
+- BM25关键词检索；可选真实embedding、余弦检索、RRF融合和RAG；每条证据带 `origin`
+  （current / history / verification），历史运行不会被当成本次证据。
+- 原生function calling：读取证据、**按区间重读被捕获的输出流**、搜索其他运行、提出验证模板。
+- 有界多轮上下文、内容和模型版本相关的缓存、审计记录，以及每条分析的 `metrics`。
+- 显式执行已登记的隔离验证模板，导入新证据并**把这次验证记入库**，再在原对话追问时可见。
+- `stats` 把 scope 内的分析聚合成合格率、引用与工具越权计数，供验证指标使用。
 
 不引入Web服务、自动任意命令执行或多Agent调度。向量使用SQLite存储和精确扫描，
 项目范围上限10000块；这是单机原型，不宣称达到大规模向量服务的性能。
@@ -55,6 +58,13 @@ sources和artifacts都是可选的，由操作者显式指定。不要指定包�
 证据提取每文件最多64KiB，超限日志保留头尾；每个源码/产物根最多32个文件、128个目录，
 总共最多256块。超限、缺失和不支持的格式会记录warnings。CSV只做结构统计，
 不会凭空判定业务正确性。JSON可能经过脱敏和格式化，引用指向规范化证据片段。
+
+`internal.log`（运行与会话共用的生命周期日志）也会作为 `kind=log` 证据导入。它记录控制事件的
+顺序、通道何时关闭、工作区导出是否成功，是报告里看不到的那部分事实。旧运行没有这个文件，
+缺失不算告警。
+
+模型还能用 `read_output(stream, offset, length)` 按区间重读 `stdout.bin`/`stderr.bin`/`internal.log`：
+单次最多8 KiB，只能是这三个流，读到的片段会成为新的证据条目——引用它同样要过引用校验。
 
 ## 4. 接入真实模型
 
@@ -101,8 +111,27 @@ embedding模型变更或重新导入后重新index。向量失败时分析会明
 目前没有自动网络重试，避免隐式重复请求；模型格式修复最多一次。
 
 输出的execution来自导入报告，analysis来自模型。status=failed仍保留execution。
-每次模型回复的事实和假设都要引用已供给的证据ID和真实片段，但这只证明引用存在，
-不证明推断正确。usage记录服务商实际返回的用量，未返回时不估造token数。
+每次模型回复的事实和假设都要引用已供给的证据ID和真实片段（**原文至少8字符**，过短的引用
+不算证据），但这只证明引用存在，不证明推断正确。usage记录服务商实际返回的用量，
+未返回时不估造token数。
+
+每条分析还记录 `metrics`，把五项能力变成可核对的数字：
+
+```json
+{"repairs":0,"tool_calls":1,"tool_denied":0,"citations":4,"retrieval":"lexical_bm25",
+ "semantic_degraded":false,"origins":{"current":6,"history":1,"verification":0},
+ "evidence_seen":7,"context_chars":8123,"calls":2,"usage_records":2,
+ "elapsed_seconds":1.2,"cache_hit":false}
+```
+
+整个scope聚合成一组合格率：
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo stats
+```
+
+`structured_output_rate` 是"通过校验的分析 / 分析总数"，`tool_denied` 是越权尝试次数（应为0），
+`semantic_degraded` 是伪造语义检索成功的次数（应为0）。它衡量格式与引用，不衡量结论对错。
 
 ## 5. 多轮追问
 
@@ -118,6 +147,10 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
 聊天上下文不会隐式创建或复用沙箱持续会话。模型最多调用6轮、4次工具，默认上下文
 48000字符上限（不是token计数），180秒检查期限及单次HTTP30秒超时。
 期限检查在HTTP调用边界进行，不能中断正在进行的同步请求。
+
+上下文里每条证据都带 `origin`：`current` 是本次运行，`history` 是其他运行，
+`verification` 是操作者为早先提案执行过的验证运行。只有 `current` 在讲本次执行，
+历史运行最多算类比。
 
 ## 6. 受控验证闭环（Linux）
 
@@ -151,22 +184,30 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo verify \
 ```
 
 不加sudo。复用sdk.launch.plan_launch的普通用户systemd委派/现有cgroup流程。
-配置摘要不匹配时拒绝；无Linux不退回process；外部等待超时停止对应launch plan。
-模板摘要锁定配置文本，不锁定运行时二进制或挂载目录内容，操作者仍需维护其可信性。
+配置摘要不匹配时拒绝；无Linux不退回process；外部等待超时停止对应launch plan，并留下
+一份 `verification.json`（`status=timed_out`），不会因为超时就把现场删掉。
+子进程只继承过滤后的环境：`SANDBOX_AI_API_KEY` 以及任何看起来像凭据的变量都不会传进去
+（systemd --user 需要的会话变量保留）。
+模板摘要锁定配置文本与解析后的路径，不锁定运行时二进制或挂载目录内容，操作者仍需维护其可信性。
 验证返回目标失败也会作为新证据导入，不能把“执行过”解释成“假设已证实”。
 
-收到新run_id后，在同session再次analyze，询问验证是否支持原假设。verification.json
-记录原analysis/proposal、模板摘要和新run_id，形成可追溯链路。
+收到新run_id后，在同session再次analyze，询问验证是否支持原假设。`verification.json`
+记录原analysis/proposal、模板摘要和新run_id，形成可追溯链路；同一份回执也写进数据库，
+所以下一次 `analyze` 的输入里会出现 `verification_context`（哪个提案、哪个模板、哪条运行、
+`executed_not_automatically_confirmed`），该运行的报告以 `origin=verification` 进入上下文，
+模型可以引用它、也必须把它当“关于提案的证据”而不是“关于本次运行的证据”。
 
 ## 7. 测试与目前的边界
 
-测试覆盖证据截断/缺失、CSV结构、脱敏、路径/链接拒绝、scope、缓存失效、
-向量模型版本、真实HTTP请求格式的模拟传输、工具越权、错误引用修复、
-模型故障、调用预算、多轮上下文、模板变更和验证超时停止契约。
+49 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo
+和 `stats` 断言。测试覆盖证据截断/缺失、`internal.log` 导入、区间读取边界、CSV结构、脱敏、
+路径/链接拒绝、scope、缓存失效、向量模型版本、真实HTTP请求格式的模拟传输、工具越权、
+引用过短与错误引用修复、模型故障、调用预算、多轮上下文、`origin` 标记、验证结果的可见性、
+模板变更、验证超时回执与子进程环境过滤。
 
 尚需真实环境验证：
 1. 模型服务商的生成、embedding、tool calls兼容性及实际诊断质量。
-2. Linux沙箱验证闭环、文件权限/链接检查及systemd委派。
+2. Linux沙箱验证闭环的真实执行（namespace/cgroup/systemd 委派、清理与产物回收）。
 3. 已知原因样例的人工评审：原因是否正确、引用是否支持结论、验证步骤是否有用。
 
 离线测试不证明模型抗提示注入能力；工具权限与调用预算是确定性约束。

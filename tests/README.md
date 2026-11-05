@@ -75,7 +75,12 @@ ctest --test-dir build --output-on-failure
 
 ## AI 分析层的可移植契约测试
 
-`unit/ai/` 覆盖证据、检索、引用、模型传输、工具与验证执行契约。
-在仓库根目录运行 `python -m unittest discover -s tests/unit/ai -v`。
-这些测试目前独立运行，未加入 CTest；不调用云模型，不证明 Linux 隔离有效。
-完整接入流程见 [AI_ANALYSIS.md](../docs/AI_ANALYSIS.md)。
+`unit/ai/` 覆盖证据、检索、引用、模型传输、工具、指标与验证执行契约。
+
+- CTest 里是 `ai_contracts`（`ctest --test-dir build -R ai_contracts`），随其它测试一起跑。
+- 单独跑：在仓库根目录执行 `python -m unittest discover -s tests/unit/ai -v`。
+- 端到端自检：`bash tools/ai-check.sh`（契约测试 + 离线 demo + `stats` 断言）。
+
+这些测试不调用云模型，也不启动真实隔离验证，因此不证明 Linux 隔离或诊断质量。
+完整接入流程见 [AI_ANALYSIS.md](../docs/AI_ANALYSIS.md)，验证边界见
+[AI_VALIDATION.md](../docs/AI_VALIDATION.md)。

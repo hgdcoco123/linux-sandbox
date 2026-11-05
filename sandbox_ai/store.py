@@ -41,6 +41,9 @@ class Store:
           CREATE TABLE IF NOT EXISTS turns(id INTEGER PRIMARY KEY AUTOINCREMENT,
             session TEXT, scope TEXT, body TEXT);
           CREATE TABLE IF NOT EXISTS analyses(id TEXT PRIMARY KEY, scope TEXT, cache_key TEXT, body TEXT);
+          CREATE TABLE IF NOT EXISTS verifications(scope TEXT, analysis_id TEXT, proposal_id TEXT,
+            run_id TEXT, body TEXT, PRIMARY KEY(scope,analysis_id,proposal_id,run_id));
+          CREATE INDEX IF NOT EXISTS verifications_scope ON verifications(scope,analysis_id);
         ''')
 
     def close(self):
@@ -169,3 +172,27 @@ class Store:
         with self.db:
             self.db.execute('INSERT INTO analyses VALUES(?,?,?,?)',
                             (result['analysis_id'], scope, key, canonical(result)))
+
+    def analyses(self, scope):
+        rows = self.db.execute('SELECT body FROM analyses WHERE scope=? ORDER BY rowid',
+                               (scope,)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    # A verification run is what turns a proposal into a fact: it has to be reachable from
+    # the conversation that proposed it, otherwise the next analyze can only guess that the
+    # new run exists and what it was for.
+    def save_verification(self, scope, receipt):
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO verifications VALUES(?,?,?,?,?)',
+                            (scope, receipt['analysis_id'], receipt['proposal_id'],
+                             receipt['run_id'], canonical(receipt)))
+
+    def verifications(self, scope, analysis_ids, limit=4):
+        if not analysis_ids:
+            return []
+        marks = ','.join('?' * len(analysis_ids))
+        rows = self.db.execute(
+            'SELECT body FROM verifications WHERE scope=? AND analysis_id IN (' + marks + ') '
+            'ORDER BY rowid DESC LIMIT ?',
+            (scope, *analysis_ids, limit)).fetchall()
+        return [json.loads(row[0]) for row in reversed(rows)]

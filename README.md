@@ -212,7 +212,13 @@ process 诊断模式不读取整机数据冒充本次资源消耗。详见 [docs
 
 ## 通用 AI 执行分析层（0.1）
 
-新增独立的 `sandbox_ai` Python 包：执行证据、结构化分析、混合检索/RAG、工具调用和多轮上下文。
-受控验证通过现有 SDK 调用隔离沙箱；不修改执行核心和原始报告。
-从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)。
+新增独立的 `sandbox_ai` Python 包：执行证据（含 `internal.log` 生命周期日志）、结构化分析、
+混合检索/RAG、有界工具调用（含按区间重读输出流）、多轮上下文、每条分析的 `metrics` 与 `stats` 聚合。
+受控验证通过现有 SDK 调用隔离沙箱，并把验证结果记入库，使下一次追问能看到"哪条提案、由哪条运行验证过"。
+不修改执行核心和原始报告。
+
+- 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`）
+- 端到端自检：`bash tools/ai-check.sh`（契约 + 离线 demo + 指标断言）
+- 从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)，
+  已执行/未执行的验证记录见 [AI_VALIDATION.md](docs/AI_VALIDATION.md)。
 离线演示及测试不等于真实模型或 Linux 隔离验收。

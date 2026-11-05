@@ -171,6 +171,11 @@ if(BUILD_TESTING)
   add_test(NAME batch_integration COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/batch_integration.py $<TARGET_FILE:sandbox>)
   set_tests_properties(batch_integration PROPERTIES TIMEOUT 120)
+  # The analysis layer is Python, but its contracts belong to the same suite: evidence
+  # bounds, citation validation, tool budgets, retrieval and the verification launch plan.
+  add_test(NAME ai_contracts COMMAND ${Python3_EXECUTABLE} -m unittest discover -s tests/unit/ai)
+  set_tests_properties(ai_contracts PROPERTIES TIMEOUT 120
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME process_integration COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/integration.py $<TARGET_FILE:sandbox>)
   set_tests_properties(process_integration PROPERTIES TIMEOUT 120)

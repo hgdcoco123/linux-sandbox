@@ -44,19 +44,25 @@ class Bundle:
     execution: dict
     evidence: list[Evidence]
     warnings: list[str] = field(default_factory=list)
+    # Where this snapshot came from. Recorded so a *bounded* range read of a captured
+    # stream (stdout/stderr/internal log) can be offered later as a tool; empty for
+    # bundles imported before the field existed, which simply disables that tool.
+    run_dir: str = ''
 
     @property
     def fingerprint(self):
         return digest(self.json())
 
     def json(self):
-        return dict(schema_version=1, scope=self.scope, run_id=self.run_id,
+        return dict(schema_version=2, scope=self.scope, run_id=self.run_id,
                     execution=self.execution, evidence=[e.json() for e in self.evidence],
-                    warnings=self.warnings)
+                    warnings=self.warnings, run_dir=self.run_dir)
 
     @classmethod
     def load(cls, value):
-        if value.get('schema_version') != 1:
+        version = value.get('schema_version')
+        if version not in (1, 2):
             raise AnalysisError('Unsupported evidence schema')
         return cls(value['scope'], value['run_id'], value['execution'],
-                   [Evidence(**item) for item in value['evidence']], value['warnings'])
+                   [Evidence(**item) for item in value['evidence']], value['warnings'],
+                   value.get('run_dir', ''))

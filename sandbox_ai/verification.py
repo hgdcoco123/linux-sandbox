@@ -1,5 +1,6 @@
 """Explicit operator execution of immutable, named isolated templates. No shell."""
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -46,6 +47,20 @@ class Templates:
         return self.items[name]
 
 
+def child_environment():
+    """The environment a verification run may inherit.
+
+    systemd --user needs its session variables, so this is a filter rather than a
+    whitelist of three names - but anything that looks like a credential stays here. The
+    sandbox CLI does not need model credentials, and a service unit would otherwise carry
+    them into the environment of every process it starts.
+    """
+    dropped = ('SANDBOX_AI_API_KEY',)
+    pattern = re.compile(r'(?i)(password|passwd|secret|api[_-]?key|authorization|access[_-]?token)')
+    return {name: value for name, value in os.environ.items()
+            if name not in dropped and not pattern.search(name)}
+
+
 def execute(store, scope, analysis_id, proposal_id, templates, binary, output_dir):
     if sys.platform != 'linux':
         raise AnalysisError('Sandbox verification requires Linux; no process fallback')
@@ -68,10 +83,22 @@ def execute(store, scope, analysis_id, proposal_id, templates, binary, output_di
     state.mkdir(mode=0o700)
     from sdk.launch import plan_launch
     plan = plan_launch(binary, config_path, state)
-    process = subprocess.Popen(plan.argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(plan.argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env=child_environment())
     timeout = sum(template['config']['limits'][k] for k in ('startup_ms', 'wall_ms', 'grace_ms')) / 1000 + 30
     try:
         stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Leave the evidence on disk before reporting: a timed-out verification is exactly
+        # the case where the operator wants to see what it was doing.
+        plan.stop(process)
+        (root / 'verification.json').write_text(json.dumps(dict(
+            schema_version=1, analysis_id=analysis_id, proposal_id=proposal_id,
+            template_digest=template['digest'], run_id=None, cli_exit=None,
+            status='timed_out', timeout_seconds=timeout,
+            note='output was not captured; the launch plan was stopped'),
+            ensure_ascii=False, indent=2), encoding='utf-8')
+        raise AnalysisError('Verification timed out; the launch plan was stopped') from None
     except BaseException:
         plan.stop(process)
         raise
@@ -83,6 +110,11 @@ def execute(store, scope, analysis_id, proposal_id, templates, binary, output_di
         if not isinstance(run_id, str) or not re.fullmatch(r'run-[a-zA-Z0-9_-]+', run_id):
             raise ValueError()
     except (ValueError, KeyError, TypeError):
+        (root / 'verification.json').write_text(json.dumps(dict(
+            schema_version=1, analysis_id=analysis_id, proposal_id=proposal_id,
+            template_digest=template['digest'], run_id=None, cli_exit=process.returncode,
+            status='no_report', note='inspect cli.stdout and cli.stderr'),
+            ensure_ascii=False, indent=2), encoding='utf-8')
         raise AnalysisError('Verification returned no usable report; inspect CLI evidence') from None
     from .evidence import collect
     bundle = collect(scope, state / run_id, context='Verification of ' + analysis_id + ': ' + proposal['reason'])
@@ -91,4 +123,8 @@ def execute(store, scope, analysis_id, proposal_id, templates, binary, output_di
                    template_digest=template['digest'], run_id=run_id, cli_exit=process.returncode,
                    execution=bundle.execution, status='executed_not_automatically_confirmed')
     (root / 'verification.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+    # Recorded in the store as well, so the conversation that proposed it can see that the
+    # run exists and what it was for. The receipt stays "executed, not confirmed": only a
+    # human reading the new evidence can decide whether the hypothesis survived.
+    store.save_verification(scope, dict(receipt, scope=scope))
     return receipt

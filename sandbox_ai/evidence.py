@@ -17,6 +17,9 @@ MAX_FILE = 64 * 1024
 MAX_REPORT = 1024 * 1024
 MAX_FILES = 32
 MAX_EVIDENCE = 256
+# Captured streams an operator may ask to read again in a bounded range.
+STREAMS = ('stdout.bin', 'stderr.bin', 'internal.log')
+MAX_READ = 8 * 1024
 TEXT_TYPES = {'.txt', '.log', '.md', '.json', '.csv', '.tsv', '.py', '.c', '.cpp',
               '.h', '.hpp', '.rs', '.go', '.java', '.js', '.ts', '.yaml', '.yml',
               '.toml', '.ini', '.cfg', '.sh', '.xml', '.cmake'}
@@ -37,7 +40,8 @@ def clean_json(value):
     return redact(value) if isinstance(value, str) else value
 
 
-def read_file(root, relative, limit=MAX_FILE, full=False):
+def _checked_open(root, relative):
+    """Open one regular file under `root`, refusing links, reparse points and hardlinks."""
     root = Path(root).resolve(strict=True)
     relative = Path(relative)
     if relative.is_absolute() or '..' in relative.parts:
@@ -51,10 +55,16 @@ def read_file(root, relative, limit=MAX_FILE, full=False):
     path.resolve(strict=True).relative_to(root)
     flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
     fd = os.open(path, flags)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(fd)
+        raise AnalysisError('Only regular, non-hardlinked files are accepted')
+    return fd, info
+
+
+def read_file(root, relative, limit=MAX_FILE, full=False):
+    fd, before = _checked_open(root, relative)
     try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise AnalysisError('Only regular, non-hardlinked files are accepted')
         if full and before.st_size > limit:
             raise AnalysisError('Structured file exceeds size limit')
         with os.fdopen(fd, 'rb', closefd=False) as file:
@@ -68,6 +78,38 @@ def read_file(root, relative, limit=MAX_FILE, full=False):
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise AnalysisError('Evidence changed during read; import only completed runs')
         return pieces, before.st_size
+    finally:
+        os.close(fd)
+
+
+def read_span(run_dir, name, offset, length):
+    """Bounded range read of a captured stream, for the read-output tool.
+
+    The model cannot name an arbitrary path: only the streams this module already
+    imports are reachable, the range is capped, and the answer is itself an evidence
+    item so whatever the model quotes from it can be validated like any other quote.
+    """
+    if name not in STREAMS:
+        raise AnalysisError('Only captured streams can be read by range')
+    if type(offset) is not int or type(length) is not int:
+        raise AnalysisError('Read range must be integers')
+    if offset < 0 or length < 1 or length > MAX_READ:
+        raise AnalysisError('Read range is out of bounds')
+    fd, before = _checked_open(run_dir, name)
+    try:
+        offset = min(offset, before.st_size)
+        length = min(length, max(0, before.st_size - offset))
+        if hasattr(os, 'pread'):
+            data = os.pread(fd, length, offset)
+        else:  # pragma: no cover - Windows only
+            os.lseek(fd, offset, os.SEEK_SET)
+            data = os.read(fd, length)
+        after = os.fstat(fd)
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise AnalysisError('Evidence changed during read; import only completed runs')
+        return dict(stream=name, offset=offset, length=len(data), size=before.st_size,
+                    truncated=offset + len(data) < before.st_size,
+                    text=redact(data.decode('utf-8', errors='replace')))
     finally:
         os.close(fd)
 
@@ -130,6 +172,22 @@ def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):
                                 f'bytes {offset}:{offset + len(data)}', size > MAX_FILE))
         if size > MAX_FILE:
             warnings.append(name + ': middle omitted; head and tail retained')
+    # The lifecycle log carries what the report cannot: the order of control events, a
+    # channel closing early, whether the workspace export was delivered. Absent for runs
+    # older than the log itself, which is not treated as a gap.
+    try:
+        pieces, size = read_file(run_dir, 'internal.log')
+    except FileNotFoundError:
+        pass
+    except (AnalysisError, OSError):
+        warnings.append('internal.log: unavailable; lifecycle detail not analyzed')
+    else:
+        for offset, data in pieces:
+            items.extend(chunks(scope, run_id, 'log', 'internal.log',
+                                data.decode('utf-8', errors='replace'),
+                                f'bytes {offset}:{offset + len(data)}', size > MAX_FILE))
+        if size > MAX_FILE:
+            warnings.append('internal.log: middle omitted; head and tail retained')
     for kind, root in (('artifact', artifact_root), ('source', source_root)):
         if root is None:
             continue
@@ -184,4 +242,5 @@ def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):
     # Bound large report text too, preserving the full factual execution object in the bundle.
     report_item = items.pop(0)
     reports = list(chunks(scope, run_id, 'report', report_item.source, report_item.text))
-    return Bundle(scope, run_id, execution, (reports + items)[:MAX_EVIDENCE], warnings)
+    return Bundle(scope, run_id, execution, (reports + items)[:MAX_EVIDENCE], warnings,
+                  str(run_dir))
