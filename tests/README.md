@@ -71,3 +71,11 @@ ctest --test-dir build --output-on-failure
 - `../benchmarks/`：性能工具。
 
 目录表示代码位置，CTest 标签表示运行分组；部署规则测试虽位于 unit，仍可通过 deployment 标签运行。
+
+
+## AI 分析层的可移植契约测试
+
+`unit/ai/` 覆盖证据、检索、引用、模型传输、工具与验证执行契约。
+在仓库根目录运行 `python -m unittest discover -s tests/unit/ai -v`。
+这些测试目前独立运行，未加入 CTest；不调用云模型，不证明 Linux 隔离有效。
+完整接入流程见 [AI_ANALYSIS.md](../docs/AI_ANALYSIS.md)。

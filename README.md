@@ -208,3 +208,11 @@ isolated 模式可配置 `"metrics": {"interval_ms": 250, "history_limit": 256}`
 `inspect` 的 `state.metrics.latest` 提供最近样本，最终报告的 `metrics.sampling` 保存汇总和有界历史。
 CPU 按一个逻辑核为 100% 计算；缺失或首次无法计算的速率为 null，不填假零。内核内存峰值与采样观察到的峰值分别记录。
 process 诊断模式不读取整机数据冒充本次资源消耗。详见 [docs/METRICS.md](docs/METRICS.md)。
+
+
+## 通用 AI 执行分析层（0.1）
+
+新增独立的 `sandbox_ai` Python 包：执行证据、结构化分析、混合检索/RAG、工具调用和多轮上下文。
+受控验证通过现有 SDK 调用隔离沙箱；不修改执行核心和原始报告。
+从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)。
+离线演示及测试不等于真实模型或 Linux 隔离验收。

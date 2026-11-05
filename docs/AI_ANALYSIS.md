@@ -1,0 +1,193 @@
+# 通用 AI 分析层：操作、架构与验证边界
+
+## 1. 实现了什么
+
+本层面向运行记录和产物，不依赖题目、学生或答案字段。支持：
+
+- 完成的单次执行 RunReport、持续会话单条命令 core record 的证据适配。
+- 运行事实、stdout/stderr、源码及文本/JSON/CSV产物快照；来源位置和内容摘要。
+- 结构化生成，事实与假设分开；证据ID和原文引用校验，一次格式修复机会。
+- BM25关键词检索；可选真实embedding、余弦检索、RRF融合和RAG。
+- 原生function calling：读取证据、搜索其他运行、提出验证模板。
+- 有界多轮上下文、内容和模型版本相关的缓存、审计记录。
+- 显式执行已登记的隔离验证模板，导入新证据，再在原对话追问。
+
+不引入Web服务、自动任意命令执行或多Agent调度。向量使用SQLite存储和精确扫描，
+项目范围上限10000块；这是单机原型，不宣称达到大规模向量服务的性能。
+
+## 2. 先运行离线演示
+
+在仓库根目录执行（Windows PowerShell和Linux均可）：
+
+```text
+python -m sandbox_ai --db ai-demo.sqlite3 --scope demo demo --output ai-demo-evidence
+```
+
+output目录必须不存在。生成三类**合成**执行记录：C++链接错误、CSV结构问题、超时。
+确定性DemoProvider会展示真实的工具路由、引用校验和多轮存储，但不产生真实AI诊断。
+三份analysis文件都明确标记offline-demo。它不调用云模型，也不启动沙箱。
+
+不要把此输出作为Linux隔离或真实模型效果验证。再次运行换一个输出目录。
+
+运行本地测试：
+
+```text
+python -m unittest discover -s tests/unit/ai -v
+```
+
+## 3. 导入真实运行
+
+先用现有CLI/SDK运行任务，等到result.json已生成、产物导出结束。
+导入目录是**包含result.json、stdout.bin、stderr.bin的目录**，不是state-root父目录。
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo import \
+  --run-dir /tmp/sandbox-state/run-REPLACE \
+  --sources /path/to/relevant-source \
+  --artifacts /path/to/exported-artifacts \
+  --context '任务要求：编译生成可执行文件，并解释失败原因。'
+```
+
+sources和artifacts都是可选的，由操作者显式指定。不要指定包含密钥或无关文件的整个主目录。
+同scope/run_id重新导入会替换证据，并让旧的向量失效。上下文是业务要求，不是已确认事实。
+导入会返回run_id；持续会话命令ID由会话目录和命令index共同组成，后续使用返回值。
+
+证据提取每文件最多64KiB，超限日志保留头尾；每个源码/产物根最多32个文件、128个目录，
+总共最多256块。超限、缺失和不支持的格式会记录warnings。CSV只做结构统计，
+不会凭空判定业务正确性。JSON可能经过脱敏和格式化，引用指向规范化证据片段。
+
+## 4. 接入真实模型
+
+通过兼容的Chat Completions和Embeddings HTTP接口接入，例如百炼提供的兼容接口。
+服务地址和模型名称必须使用当前账号、区域实际支持的值；不在代码里写死模型。
+
+Linux环境变量：
+
+```bash
+export SANDBOX_AI_BASE_URL='https://YOUR-ENDPOINT/compatible-mode/v1'
+export SANDBOX_AI_MODEL='YOUR-CHAT-MODEL'
+export SANDBOX_AI_EMBEDDING_MODEL='YOUR-EMBEDDING-MODEL'
+read -rsp 'API key: ' SANDBOX_AI_API_KEY
+export SANDBOX_AI_API_KEY
+```
+
+PowerShell可通过`$env:SANDBOX_AI_BASE_URL`等设置配置；凭据从本地环境注入，不写入仓库。
+运行compatible分析或semantic索引会把选中的证据发送给配置的服务商。脱敏是尽力而为，
+不是完整敏感数据识别，调用方需先筛选上传范围。默认验证TLS证书，拒绝HTTP重定向。
+本地模型可显式`--allow-local-http`，只允许localhost、127.0.0.1或::1。
+
+官方接口参考：
+- https://help.aliyun.com/en/model-studio/qwen-api-via-openai-chat-completions
+- https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api
+
+先不启用语义检索，分析一条运行：
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
+  --run-id run-REPLACE --question '本次任务为什么失败？请区分事实、推断和待验证内容。'
+```
+
+要用真实向量：
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo --semantic index
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo --semantic search '未定义符号 链接失败'
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo --semantic analyze \
+  --run-id run-REPLACE --question '是否有类似的历史失败？它们能否解释本次问题？'
+```
+
+embedding模型变更或重新导入后重新index。向量失败时分析会明确标注退化为关键词检索，
+不会伪装语义检索成功；search命令则直接报错。index逐块调用模型，会产生调用成本。
+目前没有自动网络重试，避免隐式重复请求；模型格式修复最多一次。
+
+输出的execution来自导入报告，analysis来自模型。status=failed仍保留execution。
+每次模型回复的事实和假设都要引用已供给的证据ID和真实片段，但这只证明引用存在，
+不证明推断正确。usage记录服务商实际返回的用量，未返回时不估造token数。
+
+## 5. 多轮追问
+
+第一次analyze返回session_id，用它继续，可以切换到同项目内另一条运行：
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
+  --run-id run-OTHER --session chat-REPLACE \
+  --question '与上一条运行相比有什么变化？哪些原因仍未验证？'
+```
+
+保留最近三轮摘要、问题和运行ID；历史AI结论仅是上下文，不自动升级为证据。
+聊天上下文不会隐式创建或复用沙箱持续会话。模型最多调用6轮、4次工具，默认上下文
+48000字符上限（不是token计数），180秒检查期限及单次HTTP30秒超时。
+期限检查在HTTP调用边界进行，不能中断正在进行的同步请求。
+
+## 6. 受控验证闭环（Linux）
+
+操作者预先准备一个可信的isolated配置，例如只打印某个依赖版本。配置必须：
+- mode=isolated，network=none，非持续会话；argv、挂载和输入由操作者固定。
+- 显式给出wall_ms<=30000、startup_ms<=15000、grace_ms<=2000、
+  memory_bytes<=1GiB、pids<=128、capture_bytes<=1MiB、tmp_bytes<=128MiB。
+- 满足现有沙箱自身的配置校验。原始模板不能来自模型或被分析产物。
+
+例如创建templates.json（路径相对该文件）：
+
+```json
+{
+  "check_dependency": {
+    "description": "使用预先准备的程序检查运行时依赖是否可用",
+    "config": "check-dependency.json"
+  }
+}
+```
+
+在analyze中添加`--templates /path/to/templates.json`。模型只能选择登记的模板，
+不能提供任意argv、路径、资源限制或网络设置。propose_verification仅生成建议。
+
+操作者检查建议后显式执行：
+
+```bash
+python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo verify \
+  --analysis-id analysis-REPLACE --proposal-id proposal-REPLACE \
+  --templates /path/to/templates.json \
+  --binary /opt/linux-sandbox/bin/sandbox --results /tmp/ai-verify-01
+```
+
+不加sudo。复用sdk.launch.plan_launch的普通用户systemd委派/现有cgroup流程。
+配置摘要不匹配时拒绝；无Linux不退回process；外部等待超时停止对应launch plan。
+模板摘要锁定配置文本，不锁定运行时二进制或挂载目录内容，操作者仍需维护其可信性。
+验证返回目标失败也会作为新证据导入，不能把“执行过”解释成“假设已证实”。
+
+收到新run_id后，在同session再次analyze，询问验证是否支持原假设。verification.json
+记录原analysis/proposal、模板摘要和新run_id，形成可追溯链路。
+
+## 7. 测试与目前的边界
+
+测试覆盖证据截断/缺失、CSV结构、脱敏、路径/链接拒绝、scope、缓存失效、
+向量模型版本、真实HTTP请求格式的模拟传输、工具越权、错误引用修复、
+模型故障、调用预算、多轮上下文、模板变更和验证超时停止契约。
+
+尚需真实环境验证：
+1. 模型服务商的生成、embedding、tool calls兼容性及实际诊断质量。
+2. Linux沙箱验证闭环、文件权限/链接检查及systemd委派。
+3. 已知原因样例的人工评审：原因是否正确、引用是否支持结论、验证步骤是否有用。
+
+离线测试不证明模型抗提示注入能力；工具权限与调用预算是确定性约束。
+读取器拒绝链接，检查文件读取期间变化，但不是对并发恶意目录替换的完整防御。
+只导入已经完成且不再被修改的导出快照。数据库是同一操作者的本地数据，scope
+不是网络授权机制。未实现图片理解、PDF/DOCX解析、自动代码修改或自主执行循环。
+
+## 8. Python调用
+
+```python
+from sandbox_ai.evidence import collect
+from sandbox_ai.store import Store
+from sandbox_ai.providers import CompatibleProvider
+from sandbox_ai.service import Analyzer
+
+store = Store('/tmp/analysis.sqlite3')
+try:
+    bundle = collect('project', '/path/to/completed/run', context='任务要求……')
+    store.put_bundle(bundle)
+    provider = CompatibleProvider('https://YOUR-ENDPOINT/v1', 'YOUR-MODEL')
+    result = Analyzer(store, provider).analyze('project', bundle.run_id, '失败原因是什么？')
+finally:
+    store.close()
+```
