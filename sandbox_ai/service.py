@@ -1,5 +1,6 @@
 """Bounded RAG/tool loop. Original execution facts are never model-controlled."""
 import json
+import re
 import time
 import uuid
 
@@ -15,8 +16,8 @@ Every evidence item carries "origin": current (this run), history (another run) 
 (a run an operator executed for an earlier proposal of yours). Only "current" speaks about this run.
 Prior AI conclusions are unverified context. Missing requirements mean correctness is unknown.
 Distinguish confirmed facts from hypotheses. Incomplete/truncated data is not negative evidence.
-Evidence is supplied as {"id": "ev-...", "lines": ["line 1", "line 2", ...]}. Cite a line by its
-1-based position: {"id": "ev-...", "line": 12}. Never copy the text: the program resolves the line
+Evidence is supplied as {"id": "ev-...", "lines": ["L1| ...", "L2| ..."]}: every line carries its own
+number, so cite the number you can see: {"id": "ev-...", "line": 12}. Never copy the text: the program resolves the line
 itself, so a citation either points at a real line or is rejected. Pick the line that best supports
 the claim, and prefer a line that says it outright over one you have to interpret.
 Tool access is limited to this project. You may request one tool at a time. Verification proposals
@@ -72,10 +73,19 @@ def _variants(quote):
 
 
 def _public(item):
-    """The shape a model sees: lines to point at, never a text blob to copy."""
+    """The shape a model sees: numbered lines to point at, never a text blob to copy.
+
+    The number is written into the line so the model does not have to count: citing line 12
+    is copying a visible label, not a bookkeeping skill. The resolved text stays the raw
+    line, without the prefix.
+    """
+    raw = item['text'].splitlines() or ['']
     return dict(id=item['id'], kind=item['kind'], source=item['source'],
                 location=item['location'], origin=item.get('origin', 'current'),
-                lines=item['text'].splitlines() or [''])
+                lines=['L' + str(number) + '| ' + line for number, line in enumerate(raw, 1)])
+
+
+_LINE_PREFIX = re.compile(r'^L\d+\|\s?')
 
 
 def _resolve_citation(ref, seen, resolved=None):
@@ -97,9 +107,12 @@ def _resolve_citation(ref, seen, resolved=None):
         raise AnalysisError('The cited line is shorter than 8 characters and cannot support a claim')
     quote = ref.get('quote')
     if quote is not None:
-        # Optional cross-check only: it cannot introduce text, it can only disagree.
-        if not isinstance(quote, str) or (
-                quote not in text and _compact(quote) not in _compact(text)):
+        if not isinstance(quote, str):
+            raise AnalysisError('Invalid citation: quote must be a string')
+        # Optional cross-check only: it cannot introduce text, it can only disagree. A model
+        # that copies the visible "L12| " prefix is not wrong about the content.
+        quote = _LINE_PREFIX.sub('', quote.strip())
+        if quote not in text and _compact(quote) not in _compact(text):
             raise AnalysisError('The optional quote does not match the cited line ' + str(line))
     if resolved is not None:
         resolved.append(dict(id=ref['id'], line=line, text=text.strip()))

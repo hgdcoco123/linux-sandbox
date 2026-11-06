@@ -22,7 +22,8 @@ def provider(args):
     return CompatibleProvider(args.base_url, args.model, args.embedding_model,
                               key_env=args.key_env, allow_local_http=args.allow_local_http,
                               rerank_model=os.environ.get('SANDBOX_AI_RERANK_MODEL', '')
-                              if getattr(args, 'rerank', False) else '')
+                              if getattr(args, 'rerank', False) else '',
+                              rerank_path=os.environ.get('SANDBOX_AI_RERANK_PATH', '/rerank'))
 
 
 def parser():
@@ -66,7 +67,22 @@ def parser():
     exp.add_argument('--run-dir', type=Path, required=True, help='Completed run directory')
     exp.add_argument('--question', default='这次运行为什么失败？请区分已确认事实、原因假设和仍缺少的信息。')
     exp.add_argument('--context', default='')
+    exp.add_argument('--json', dest='as_json', action='store_true',
+                     help='Print the machine-readable result instead of the human report')
     return p
+
+
+def _failure_kind(error):
+    """Bucket a failure by cause, so the aggregate says where the limit is."""
+    text = (error or '').lower()
+    for name, needles in (('transport', ('http', 'transport', 'timed out', 'deadline')),
+                          ('citation', ('citation', 'line')),
+                          ('schema', ('analysis fields', 'analysis list', 'invalid claim',
+                                      'invalid next step', 'json')),
+                          ('budget', ('budget', 'exhausted', 'oversized'))):
+        if any(needle in text for needle in needles):
+            return name
+    return 'other' if text else 'unknown'
 
 
 def stats(store, scope):
@@ -78,10 +94,17 @@ def stats(store, scope):
         return sum(m.get(key) or 0 for m in metrics)
     def rate(count, size):
         return round(count / size, 3) if size else None
+    failures = {}
+    for run in runs:
+        if run.get('status') != 'completed':
+            kind = _failure_kind(run.get('error'))
+            failures[kind] = failures.get(kind, 0) + 1
     return dict(scope=scope, analyses=len(runs), completed=len(completed),
                 structured_output_rate=rate(len(completed), len(runs)),
+                failure_reasons=failures,
                 repairs=total('repairs'), citations=total('citations'),
                 tool_calls=total('tool_calls'), tool_denied=total('tool_denied'),
+                reranked=sum(1 for m in metrics if m.get('reranked')),
                 semantic_degraded=sum(1 for m in metrics if m.get('semantic_degraded')),
                 cache_hits=sum(1 for m in metrics if m.get('cache_hit')),
                 retrieval_modes=sorted({m.get('retrieval') for m in metrics if m.get('retrieval')}),
@@ -141,6 +164,14 @@ def explain(store, args, model):
     engine = Analyzer(store, model, semantic=args.semantic,
                       reranker=model if args.rerank else None)
     result = engine.analyze(args.scope, bundle.run_id, args.question)
+    if getattr(args, 'as_json', False):
+        print(json.dumps(dict(run_id=bundle.run_id, status=result['status'],
+                              error=result.get('error'), execution=result['execution'],
+                              analysis=result.get('analysis'),
+                              resolved_citations=result.get('resolved_citations'),
+                              metrics=result.get('metrics'), warnings=result.get('warnings')),
+                         ensure_ascii=False, indent=2))
+        return 2 if result['status'] != 'completed' else 0
     execution = result['execution'] or {}
     print('run: ' + bundle.run_id)
     print('execution: ' + str(execution.get('summary')) + ', verdict ' +

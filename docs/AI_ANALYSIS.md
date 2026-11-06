@@ -126,7 +126,7 @@ embedding模型变更或重新导入后重新index。向量失败时分析会明
 
 usage记录服务商实际返回的用量，未返回时不估造token数。
 
-检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
+证据给模型时每行带 `L12| ` 前缀，行号是可见标签、不需要数；引用只回行号。`stats` 另给出 `failure_reasons`（transport / citation / schema / budget）分布。检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
 （`SANDBOX_AI_RERANK_MODEL`）再调 `/rerank` 精排；精排失败**降级保留融合顺序**并写进 `warnings`，
 `metrics.reranked` 为 false，`metrics.retrieval` 标记为不含 `+rerank`。
 

@@ -17,7 +17,8 @@ class NoRedirect(HTTPRedirectHandler):
 
 class CompatibleProvider:
     def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=90,
-                 allow_local_http=False, max_tokens=3000, rerank_model=''):
+                 allow_local_http=False, max_tokens=3000, rerank_model='',
+                 rerank_path='/rerank'):
         parsed = urlsplit(base_url)
         local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
         if (parsed.scheme != 'https' and not (allow_local_http and local and parsed.scheme == 'http')
@@ -44,10 +45,17 @@ class CompatibleProvider:
         # invalidation the same way the embedding model does.
         self.rerank_model = rerank_model
         self.rerank_identity = 'rerank:' + digest([self.base, rerank_model]) if rerank_model else ''
+        # Reranking is not part of the OpenAI-compatible surface: some vendors serve /rerank
+        # next to the chat endpoint, others (DashScope) serve a native path with a different
+        # request and response envelope. The path is configuration; the envelope is chosen
+        # from the path rather than hardcoded to one vendor.
+        self.rerank_path = rerank_path
+        self.origin = parsed.scheme + '://' + parsed.netloc
         self.usage = []
 
     def post(self, endpoint, payload):
-        request = Request(self.base + endpoint, data=canonical(payload).encode(),
+        url = endpoint if endpoint.startswith('http') else self.base + endpoint
+        request = Request(url, data=canonical(payload).encode(),
                           headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.key})
         try:
             with build_opener(NoRedirect()).open(request, timeout=self.timeout) as response:
@@ -105,9 +113,24 @@ class CompatibleProvider:
         for document in documents:
             if not isinstance(document, str) or len(document) > 8000:
                 raise AnalysisError('Rerank documents must be bounded strings')
-        response = self.post('/rerank', dict(model=self.rerank_model, query=query,
-                                             documents=documents, top_n=len(documents)))
-        results = response.get('results') if isinstance(response, dict) else None
+        native = self.rerank_path.startswith('/api/') or self.rerank_path.startswith('http')
+        if native:
+            # DashScope-style envelope: input/parameters in, output.results out.
+            payload = dict(model=self.rerank_model,
+                           input=dict(query=query, documents=documents),
+                           parameters=dict(return_documents=False, top_n=len(documents)))
+            endpoint = (self.rerank_path if self.rerank_path.startswith('http')
+                        else self.origin + self.rerank_path)
+        else:
+            payload = dict(model=self.rerank_model, query=query, documents=documents,
+                           top_n=len(documents))
+            endpoint = self.rerank_path
+        response = self.post(endpoint, payload)
+        results = None
+        if isinstance(response, dict):
+            results = response.get('results')
+            if results is None and isinstance(response.get('output'), dict):
+                results = response['output'].get('results')
         if not isinstance(results, list) or len(results) != len(documents):
             raise AnalysisError('Rerank returned an incomplete or malformed ranking')
         ranked = []

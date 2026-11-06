@@ -35,7 +35,10 @@ def make_provider(args):
         return DemoProvider()
     return CompatibleProvider(args.base_url, args.model, args.embedding_model,
                               key_env=args.key_env, allow_local_http=args.allow_local_http,
-                              timeout=args.timeout, max_tokens=args.max_tokens)
+                              timeout=args.timeout, max_tokens=args.max_tokens,
+                              rerank_model=os.environ.get('SANDBOX_AI_RERANK_MODEL', '')
+                              if args.rerank else '',
+                              rerank_path=os.environ.get('SANDBOX_AI_RERANK_PATH', '/rerank'))
 
 
 def main(argv=None):
@@ -53,6 +56,7 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=90, help='per-request HTTP timeout, seconds')
     parser.add_argument('--max-tokens', type=int, default=3000, help='answer budget per request')
     parser.add_argument('--deadline', type=int, default=180, help='wall deadline for one analysis, seconds')
+    parser.add_argument('--rerank', action='store_true', help='Second stage rerank of the fused candidates')
     args = parser.parse_args(argv)
 
     work = args.db.parent if args.db else Path(tempfile.mkdtemp(prefix='sbx-ai-eval-'))
@@ -67,7 +71,8 @@ def main(argv=None):
                              context='评估用例：一条已经完成的真实运行。')
             store.put_bundle(bundle)
             started = time.monotonic()
-            result = Analyzer(store, provider, deadline_seconds=args.deadline).analyze(
+            result = Analyzer(store, provider, deadline_seconds=args.deadline,
+                              reranker=provider if args.rerank else None).analyze(
                 args.scope, bundle.run_id, args.question)
             analysis = result.get('analysis') or {}
             rows.append(dict(

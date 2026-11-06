@@ -158,13 +158,18 @@ def quote_line(text, limit=160):
     return text.strip()[:limit]
 
 
+_MODEL_LINE_PREFIX = re.compile(r'^L\d+\|\s?')
+
+
 def line_reference(item, minimum=8):
     """The 1-based line number a model should cite for this evidence item."""
     lines = item.get('lines')
     if lines is None:
         lines = item['text'].splitlines() or ['']
     for index, line in enumerate(lines, 1):
-        if len(line.strip()) >= minimum:
+        # Prompt items carry a visible "L12| " label; it does not count as content.
+        text = _MODEL_LINE_PREFIX.sub('', line) if isinstance(line, str) else ''
+        if len(text.strip()) >= minimum:
             return dict(id=item['id'], line=index)
     return dict(id=item['id'], line=1)
 
