@@ -2,7 +2,7 @@
 
 > **一句话**：Linux 上 79 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
 > 真实模型在同一批 4 条用例上从 1/4 走到 **4/4**（靠契约演进，不是换模型）；**未验证**：泛化评测
-> （无 held-out 用例）、引用的语义充分性（只验来源真实）、以及加完可选字段后的真实抽样（凭据已不在机器上）。
+> （无 held-out 用例）、引用的语义充分性（只验来源真实）、以及"提案→执行→回问"两轮链路在真实模型下的表现。
 
 日期：2026-11-06。环境：Linux（Ubuntu 虚拟机），Python 3.12；Windows 上另行跑过同一套测试。
 
@@ -225,9 +225,20 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 | 慢调用无反馈 | 阻塞请求期间 5 秒一次心跳，`--quiet` 关闭；非 TTY 不打印 | 由 `providers._tick` 覆盖（不写测试，避免睡 5 秒） |
 | 无重试 | 429/5xx/超时重试 ≤2 次，尊重 `Retry-After`（上限 5 秒）；400 等不重试 | `test_finish.Retry` 3 条 |
 
-**注意**：以上完成的 Linux 端复验（`bash verify.sh`、`ai-check`、真实模型测量）在提交时**未执行**——
-当时虚拟机不可达（`192.168.244.128:8000` 无响应）。Windows 上 79 项通过；POSIX-only 的 5 项
-（符号链接、假沙箱执行）需要 Linux 上补跑。
+**Linux 复验（已完成）**：`79` 项契约测试全过、`CTest 34/34`、`ai-check` 通过、演练 `7/7` 必检行、
+`verify.sh` 输出 `ALL TESTS PASSED`。复验过程中抓到并修掉三个只在 Linux 暴露的问题：
+
+1. `test_e2e_driver` 缺 `from unittest.mock import patch`（Windows 上被 `skipIf(posix)` 掩盖）；
+2. `verification.execute` 对没有 `run_id` 的历史分析会 `KeyError`（`${run_dir}` 查找引入）；
+3. `Templates` 在替换前就解析含占位符的路径，把 `${run_dir}` 拼成 `templates-run//abs/path`。
+
+**可选字段上线后的真实抽样（已完成）**：用演练新产生的两条真实运行（`nonzero_exit` + `success`）
+跑 `--limit 2`，`qwen-plus` + 真 rerank：**2/2 通过**、16 条引用全部解析、0 次修复、13–17 秒/条、
+`retrieval_modes=["lexical_bm25+rerank"]`、`reranked=2`。可选字段没有降低通过率。
+
+`hypothesis_status` 在这两条里**为空**——它们是孤立运行、上下文里没有待结算的验证结果，模型正确地
+省略了该字段。正例路径（支持/反驳必须引用验证运行）由 `test_finish.HypothesisUpdates` 6 条用例
+和演练的脚本化流程覆盖；真机上"两轮：提案→执行→回问"的完整数据链路**尚未用真实模型跑过**。
 
 ## 未验证
 
