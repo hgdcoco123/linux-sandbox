@@ -26,7 +26,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sandbox_ai.evidence import collect
-from sandbox_ai.models import canonical
+from sandbox_ai.models import AnalysisError, canonical
 from sandbox_ai.service import Analyzer
 from sandbox_ai.store import Store
 from sandbox_ai.verification import Templates, execute
@@ -211,10 +211,66 @@ def main(argv=None):
             return 1
         print('verification evidence is citable')
 
+        # --- the boundaries the contract tests cover only with fakes -----------------------
+        # A verification whose target fails must be recorded as the target failing, not as a
+        # confirmed hypothesis and not as a tool error.
+        boundary = register_templates(work, args, runs, (
+            ('fail_probe', '目标自身失败的检查', dict(argv=[args.fixture, 'session-read'])),
+            ('hang_probe', '目标超时的检查', dict(argv=[args.fixture, 'ignore-term'],
+                                             limits=dict(LIMITS, wall_ms=200, grace_ms=200)))))
+        failed = propose_and_execute(store, args.scope, run_id, work, args, boundary,
+                                     'fail_probe', 'target-failed')
+        if failed['execution'].get('verdict') != 'target_failed':
+            print('FAIL: a failing target was not recorded as target_failed: ' +
+                  json.dumps({k: failed['execution'].get(k) for k in ('summary', 'verdict', 'exit_code')}),
+                  file=sys.stderr)
+            return 1
+        print('verification target failure is recorded as target_failed')
+
+        hung = propose_and_execute(store, args.scope, run_id, work, args, boundary,
+                                   'hang_probe', 'target-timeout')
+        if hung['execution'].get('summary') != 'timeout':
+            print('FAIL: a target that ignores SIGTERM was not reported as a timeout: ' +
+                  json.dumps({k: hung['execution'].get(k) for k in
+                              ('summary', 'verdict', 'exit_code', 'signal')}), file=sys.stderr)
+            return 1
+        print('verification target timeout is reported, not hidden')
+
+        # A template that changed after the proposal must be refused before anything runs.
+        changed = register_templates(work, args, runs, (
+            ('patch_probe', '模板变更检查', dict(argv=[args.fixture, 'session-write'])),
+        ), subdir='templates-patch')
+        model = Scripted([proposal_reply('patch_probe', '模板变更边界'), analysis_reply])
+        analysis = Analyzer(store, model, templates=changed).analyze(
+            args.scope, run_id, '边界检查：模板变更')
+        proposal = analysis['proposals'][0]
+        patch = changed.items['patch_probe']
+        config = dict(patch['config'], limits=dict(patch['config']['limits'], wall_ms=4000))
+        (work/'templates-patch'/'patch-probe.json').write_text(json.dumps(config))
+        reloaded = Templates(work/'templates-patch'/'templates.json')
+        try:
+            execute(store, args.scope, analysis['analysis_id'], proposal['id'], reloaded,
+                    args.sandbox.resolve(), work/'changed-template')
+        except AnalysisError as error:
+            if 'changed' not in str(error):
+                print('FAIL: unexpected refusal: ' + str(error), file=sys.stderr)
+                return 1
+            if (work/'changed-template').exists():
+                print('FAIL: a changed template still created a run directory', file=sys.stderr)
+                return 1
+            print('a changed template is refused before anything runs')
+        else:
+            print('FAIL: a changed template was executed', file=sys.stderr)
+            return 1
+
         summary = stats(store, args.scope)
         (work/'stats.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         if summary['completed'] < 2 or summary['tool_denied'] != 0:
             print('FAIL: unexpected aggregate metrics ' + json.dumps(summary), file=sys.stderr)
+            return 1
+        if summary['verifications'] != 3:
+            print('FAIL: expected three recorded verifications, saw ' +
+                  str(summary['verifications']), file=sys.stderr)
             return 1
         print('== stats: ' + json.dumps({k: summary[k] for k in
               ('analyses', 'completed', 'tool_denied', 'verifications')}))
@@ -222,6 +278,34 @@ def main(argv=None):
         return 0
     finally:
         store.close()
+
+
+def register_templates(work, args, runs, entries, subdir='templates-boundary'):
+    """Write extra trusted templates the operator would have prepared by hand."""
+    folder = work/subdir
+    folder.mkdir(parents=True, exist_ok=True)
+    registry = {}
+    for name, description, overrides in entries:
+        config = dict(schema_version=1, mode='isolated', network='none',
+                      runtime_root=str(args.runtime.resolve()), cgroup_root=str(runs),
+                      limits=dict(LIMITS))
+        config.update(overrides)
+        (folder/(name.replace('_', '-') + '.json')).write_text(json.dumps(config))
+        registry[name] = {'description': description,
+                          'config': name.replace('_', '-') + '.json'}
+    (folder/'templates.json').write_text(json.dumps(registry))
+    return Templates(folder/'templates.json')
+
+
+def propose_and_execute(store, scope, run_id, work, args, templates, template_id, label):
+    """The operator path: the model proposes, the operator executes, the receipt is recorded."""
+    model = Scripted([proposal_reply(template_id, '边界检查：' + label), analysis_reply])
+    analysis = Analyzer(store, model, templates=templates).analyze(
+        scope, run_id, '边界检查：' + label)
+    if analysis['status'] != 'completed' or not analysis['proposals']:
+        raise AnalysisError('boundary analysis did not produce a proposal: ' + label)
+    return execute(store, scope, analysis['analysis_id'], analysis['proposals'][0]['id'],
+                   templates, args.sandbox.resolve(), work/label)
 
 
 if __name__ == '__main__':

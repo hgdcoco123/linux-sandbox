@@ -81,6 +81,9 @@ required=(
     "verification ran isolated and cleaned up"
     "verification receipt visible to the next turn"
     "verification evidence is citable"
+    "verification target failure is recorded as target_failed"
+    "verification target timeout is reported, not hidden"
+    "a changed template is refused before anything runs"
 )
 incomplete=0
 for line in "${required[@]}"; do
