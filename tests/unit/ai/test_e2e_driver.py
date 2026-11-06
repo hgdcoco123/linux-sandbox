@@ -80,16 +80,30 @@ class DrillTests(unittest.TestCase):
         self.store.close()
         self.temp.cleanup()
 
-    def templates(self, name, argv, subdir='templates-drill', **limits):
+    def templates(self, name, argv, subdir='templates-drill', mount=None, **limits):
         folder = self.root/subdir
         folder.mkdir(exist_ok=True)
         config = dict(schema_version=1, mode='isolated', network='none',
                       runtime_root=str(self.root/'runtime'), cgroup_root=str(self.root/'cgroup'),
                       argv=argv, limits=dict(self.e2e.LIMITS, **limits))
+        if mount:
+            config['mounts'] = [mount]
         (folder/(name + '.json')).write_text(json.dumps(config))
         (folder/'templates.json').write_text(json.dumps({name: {'description': 'drill',
                                                                 'config': name + '.json'}}))
         return Templates(folder/'templates.json')
+
+    def test_the_template_sees_the_analysed_run_dir(self):
+        # A verification that checks the input of the run that failed needs that run's files;
+        # the placeholder is filled by the program, not by the model.
+        registry = self.templates(
+            'probe', ['x', 'session-write'], subdir='templates-run',
+            mount={'source': '${run_dir}', 'target': '/evidence', 'readonly': True})
+        receipt = self.e2e.propose_and_execute(self.store, 'drill', 'run-drill', self.root,
+                                               self.args, registry, 'probe', 'with-run-dir')
+        written = json.loads((self.root/'with-run-dir'/'config.json').read_text())
+        self.assertEqual(written['mounts'][0]['source'], str(self.root/'run'))
+        self.assertEqual(receipt['status'], 'executed_not_automatically_confirmed')
 
     def test_a_failing_target_is_recorded_as_target_failed(self):
         registry = self.templates('fail', ['x', 'session-read'])

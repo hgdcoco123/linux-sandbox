@@ -1,6 +1,6 @@
 # AI 分析层验证记录
 
-> **一句话**：Linux 上 78 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
+> **一句话**：Linux 上 79 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
 > 真实模型在同一批 4 条用例上从 1/4 走到 **4/4**（靠契约演进，不是换模型）；**未验证**：泛化评测
 > （无 held-out 用例）、引用的语义充分性（只验来源真实）、以及加完可选字段后的真实抽样（凭据已不在机器上）。
 
@@ -13,8 +13,8 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-结果：**78 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
-`test_verification.py` 7 / `test_e2e_driver.py` 4 / `test_finish.py` 12）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
+结果：**79 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
+`test_verification.py` 7 / `test_e2e_driver.py` 5 / `test_finish.py` 12）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
 
 同一套测试已注册进 CTest：
 
@@ -25,7 +25,7 @@ ctest --test-dir build
 `ai_contracts` 作为第 34 个测试运行并通过（`100% tests passed, 0 tests failed out of 34`；
 `isolation_integration` 在无 systemd 委派时跳过）。
 
-`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 78 项契约测试、跑离线 demo 并断言
+`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 79 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
 
@@ -216,7 +216,7 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 
 ## 1.0 三项补完（已实现，Linux 验证待跑）
 
-上一轮审查列出三个功能缺口，现已实现并有用例覆盖（Windows 本地 78 项通过、5 项 POSIX-only 跳过）：
+上一轮审查列出三个功能缺口，现已实现并有用例覆盖（Windows 本地 79 项通过、5 项 POSIX-only 跳过）：
 
 | 缺口 | 实现 | 用例 |
 |---|---|---|
@@ -226,7 +226,7 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 | 无重试 | 429/5xx/超时重试 ≤2 次，尊重 `Retry-After`（上限 5 秒）；400 等不重试 | `test_finish.Retry` 3 条 |
 
 **注意**：以上完成的 Linux 端复验（`bash verify.sh`、`ai-check`、真实模型测量）在提交时**未执行**——
-当时虚拟机不可达（`192.168.244.128:8000` 无响应）。Windows 上 78 项通过；POSIX-only 的 5 项
+当时虚拟机不可达（`192.168.244.128:8000` 无响应）。Windows 上 79 项通过；POSIX-only 的 5 项
 （符号链接、假沙箱执行）需要 Linux 上补跑。
 
 ## 未验证

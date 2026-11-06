@@ -224,7 +224,7 @@ process 诊断模式不读取整机数据冒充本次资源消耗。详见 [docs
   "已执行未自动证实"。不修改执行核心和原始报告。
 
 - 一条命令看失败：`python -m sandbox_ai --provider compatible explain --run-dir <run>`
-- 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`，78 项）
+- 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`，79 项）
 - 端到端自检：`bash tools/ai-check.sh`（契约 + 离线 demo + 指标断言）
 - 验证闭环演练：`bash tools/ai-verify-e2e.sh`（由操作者本人运行；真实隔离执行验证模板）
 - 从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)，

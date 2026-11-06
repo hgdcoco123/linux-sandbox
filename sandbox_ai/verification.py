@@ -10,6 +10,21 @@ from .evidence import read_file, MAX_REPORT
 from .models import AnalysisError, digest
 
 
+RUNDIR = '${run_dir}'
+
+
+def _resolve_template_path(value, base):
+    """Resolve a config path, leaving `${run_dir}` for the executor to fill.
+
+    Resolving a placeholder against the registry directory first would turn
+    `templates/${run_dir}` into `templates//abs/path`; the placeholder has to survive
+    registration untouched, and it is the only thing the executor substitutes.
+    """
+    if RUNDIR in value:
+        return value
+    return str((base / value).resolve())
+
+
 class Templates:
     def __init__(self, path):
         path = Path(path).resolve(strict=True)
@@ -36,9 +51,9 @@ class Templates:
                     raise AnalysisError('Verification requires an explicit bounded limit: ' + key)
             for key in ('runtime_root', 'stdin_file', 'cgroup_root', 'workspace_transfer'):
                 if config.get(key):
-                    config[key] = str((config_path.parent / config[key]).resolve())
+                    config[key] = _resolve_template_path(config[key], config_path.parent)
             for mount in config.get('mounts', []):
-                mount['source'] = str((config_path.parent / mount['source']).resolve())
+                mount['source'] = _resolve_template_path(mount['source'], config_path.parent)
             self.items[name] = dict(id=name, description=spec['description'], config=config,
                                    digest=digest(config))
 
