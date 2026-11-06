@@ -114,6 +114,37 @@ def read_span(run_dir, name, offset, length):
         os.close(fd)
 
 
+def render_summary(execution):
+    """Key report facts as plain lines.
+
+    Models asked to quote compact or deeply nested JSON reflow it, merge lines and drop
+    keys between them; a line like `exit_code: 0` is easy to copy exactly. This is the same
+    data as the report, only presented so it can be quoted - not an extra claim.
+    """
+    lines = []
+    for label, value in (('summary', execution.get('summary')), ('verdict', execution.get('verdict')),
+                         ('exit_code', execution.get('exit_code')), ('signal', execution.get('signal')),
+                         ('stop_reason', execution.get('stop_reason')),
+                         ('isolated', execution.get('isolated'))):
+        if value is not None and value != '' and value is not False:
+            lines.append(f'{label}: {value}')
+    workspace = execution.get('workspace') or {}
+    if isinstance(workspace, dict) and workspace:
+        export = workspace.get('export') or {}
+        lines.append('workspace export: ok=' + str(export.get('ok')) +
+                     ' error=' + repr(export.get('error') or '') +
+                     ' durable=' + str(export.get('durable')))
+    for error in (execution.get('errors') or [])[:3]:
+        lines.append('error: ' + str(error))
+    cleanup = execution.get('cleanup') or {}
+    if isinstance(cleanup, dict) and cleanup:
+        lines.append('cleanup: cgroup_removed=' + str(cleanup.get('cgroup_removed')) +
+                     ' descendants_empty=' + str(cleanup.get('descendants_empty')) +
+                     ' launcher_reaped=' + str(cleanup.get('launcher_reaped')) +
+                     ' errors=' + str(len(cleanup.get('errors') or [])))
+    return lines
+
+
 def chunks(scope, run_id, kind, source, text, location='text', truncated=False):
     text = redact(text)
     for start in range(0, len(text), 1600):
@@ -246,5 +277,9 @@ def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):
     # Bound large report text too, preserving the full factual execution object in the bundle.
     report_item = items.pop(0)
     reports = list(chunks(scope, run_id, 'report', report_item.source, report_item.text))
+    rendered = render_summary(execution)
+    if rendered:
+        reports += list(chunks(scope, run_id, 'report', 'result.json#summary', 'rendered key facts',
+                               '\n'.join(rendered)))
     return Bundle(scope, run_id, execution, (reports + items)[:MAX_EVIDENCE], warnings,
                   str(run_dir))

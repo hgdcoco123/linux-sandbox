@@ -145,7 +145,7 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
 
 保留最近三轮摘要、问题和运行ID；历史AI结论仅是上下文，不自动升级为证据。
 聊天上下文不会隐式创建或复用沙箱持续会话。模型最多调用6轮、4次工具，默认上下文
-48000字符上限（不是token计数），180秒检查期限及单次HTTP30秒超时。
+48000字符上限（不是token计数），180秒检查期限及单次HTTP60秒超时。
 期限检查在HTTP调用边界进行，不能中断正在进行的同步请求。
 
 上下文里每条证据都带 `origin`：`current` 是本次运行，`history` 是其他运行，

@@ -117,6 +117,15 @@ class CitationRules(unittest.TestCase):
         with self.assertRaisesRegex(AnalysisError, 'verbatim'):
             validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
 
+    def test_double_escaped_quote_is_accepted(self):
+        # A model can escape a quote once too often inside its JSON; unescaping recovers
+        # exactly the characters that are in the evidence.
+        text = '{\n  "exit_code": 0,\n  "verdict": "ok"\n}'
+        value = dict(summary='s', facts=[dict(statement='observed',
+                     citations=[dict(id='ev-1', quote='"exit_code": 0,\\n  "verdict": "ok"')])],
+                     hypotheses=[], missing_info=[], next_steps=[])
+        validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+
     def test_report_evidence_is_pretty_printed(self):
         # Compact JSON is hard to quote exactly and hard to read; the report is stored
         # indented so a model can copy a line instead of re-serialising it.

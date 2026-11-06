@@ -55,6 +55,20 @@ def _compact(text):
     return ''.join(text.split())
 
 
+def _variants(quote):
+    """The quote as given, plus its once-unescaped form.
+
+    A model writing a quote inside a JSON string sometimes escapes it again, so the parsed
+    value carries literal `\\"` and `\\n`. Unescaping recovers exactly the characters that
+    are in the evidence; it does not tolerate different words or reordered content.
+    """
+    yield quote
+    unescaped = (quote.replace('\\\\', '\\').replace('\\n', '\n')
+                      .replace('\\t', '\t').replace('\\"', '"'))
+    if unescaped != quote:
+        yield unescaped
+
+
 def validate_analysis(value, seen):
     keys = {'summary', 'facts', 'hypotheses', 'missing_info', 'next_steps'}
     if not isinstance(value, dict) or set(value) != keys:
@@ -86,9 +100,10 @@ def validate_analysis(value, seen):
                 if text is None:
                     raise AnalysisError('Citation refers to evidence that was not supplied to the model')
                 # Whitespace only is allowed to differ: models reflow JSON when they quote it,
-                # and a run's report evidence is JSON. Every other character must be present,
-                # in order, in that evidence.
-                if ref['quote'] not in text and _compact(ref['quote']) not in _compact(text):
+                # and a run's report evidence is JSON. An extra level of escaping is unwrapped
+                # for the same reason. Every other character must be present, in order.
+                if not any(quote in text or _compact(quote) in _compact(text)
+                           for quote in _variants(ref['quote'])):
                     raise AnalysisError('Citation quote is not a verbatim excerpt of the cited evidence: '
                                         'copy the characters as they appear, do not reformat JSON')
     for item in value['missing_info']:

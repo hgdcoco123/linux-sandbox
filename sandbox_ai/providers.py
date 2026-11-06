@@ -15,7 +15,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class CompatibleProvider:
-    def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=30,
+    def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=60,
                  allow_local_http=False):
         parsed = urlsplit(base_url)
         local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
