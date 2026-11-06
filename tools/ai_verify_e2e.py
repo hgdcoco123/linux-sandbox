@@ -55,7 +55,7 @@ class Scripted:
 
 def analysis_reply(messages, predicate=None):
     evidence = json.loads(messages[1]['content'])['evidence']
-    chosen = next((item for item in evidence if predicate(item)), evidence[0])
+    chosen = next((item for item in evidence if predicate is None or predicate(item)), evidence[0])
     return dict(role='assistant', content=canonical(dict(
         summary='脚本化模型：仅用于验证链路，不作诊断结论。',
         facts=[dict(statement='执行报告记录了本次结果。',
