@@ -5,6 +5,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
+from .evidence import quote_line
 from .models import AnalysisError, canonical, digest
 from .store import normalize
 
@@ -100,7 +101,7 @@ class DemoProvider:
                 function=dict(name='search_history', arguments=canonical({'query': initial['question']})))])
         item = initial['evidence'][0]
         analysis = dict(summary='离线演示：已读取执行证据；未调用真实模型，不推断故障原因。',
-            facts=[dict(statement='执行报告包含以下记录。', citations=[dict(id=item['id'], quote=item['text'][:160])])],
+            facts=[dict(statement='执行报告包含以下记录。', citations=[dict(id=item['id'], quote=quote_line(item['text']))])],
             hypotheses=[], missing_info=['需配置真实模型后评估诊断质量。'],
             next_steps=[dict(action='检查报告和日志中的原始证据。', expected_observation='确认执行状态。')])
         return dict(role='assistant', content=canonical(analysis))

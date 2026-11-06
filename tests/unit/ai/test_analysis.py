@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from sandbox_ai.cli import demo
-from sandbox_ai.evidence import collect, read_file, MAX_FILE
+from sandbox_ai.evidence import collect, quote_line, read_file, MAX_FILE
 from sandbox_ai.models import AnalysisError, Bundle, evidence, canonical
 from sandbox_ai.providers import DemoProvider, CompatibleProvider
 from sandbox_ai.service import Analyzer, validate_analysis
@@ -36,7 +36,7 @@ def answer(messages):
     item = json.loads(messages[1]['content'])['evidence'][0]
     return dict(role='assistant', content=canonical(dict(summary='Evidence summary',
         facts=[dict(statement='The report records this value.',
-                    citations=[dict(id=item['id'], quote=item['text'][:60])])],
+                    citations=[dict(id=item['id'], quote=quote_line(item['text']))])],
         hypotheses=[], missing_info=[], next_steps=[])))
 
 

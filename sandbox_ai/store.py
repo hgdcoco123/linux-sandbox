@@ -30,6 +30,11 @@ class Store:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(path, timeout=10)
+        # Reading a scope's corpus means parsing every evidence row; every query and every
+        # search_history tool call used to do that. The cache is dropped by a generation
+        # counter whenever the corpus changes, so it cannot serve a stale answer.
+        self._generation = 0
+        self._corpus = {}
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS bundles(scope TEXT, run TEXT, body TEXT,
@@ -58,6 +63,7 @@ class Store:
                             (bundle.scope, bundle.run_id, canonical(bundle.json())))
             self.db.executemany('INSERT INTO evidence VALUES(?,?,?,?)',
                                [(e.id, e.scope, e.run_id, canonical(e.json())) for e in bundle.evidence])
+        self._generation += 1
 
     def bundle(self, scope, run_id):
         row = self.db.execute('SELECT body FROM bundles WHERE scope=? AND run=?', (scope, run_id)).fetchone()
@@ -66,10 +72,15 @@ class Store:
         return Bundle.load(json.loads(row[0]))
 
     def corpus(self, scope):
+        cached = self._corpus.get(scope)
+        if cached is not None and cached[0] == self._generation:
+            return list(cached[1])
         rows = self.db.execute('SELECT body FROM evidence WHERE scope=? ORDER BY id LIMIT 10001', (scope,)).fetchall()
         if len(rows) > 10000:
             raise AnalysisError('Local index exceeds 10000 chunks; split project scope')
-        return [Evidence(**json.loads(row[0])) for row in rows]
+        items = [Evidence(**json.loads(row[0])) for row in rows]
+        self._corpus[scope] = (self._generation, items)
+        return list(items)
 
     def get(self, scope, evidence_id):
         row = self.db.execute('SELECT body FROM evidence WHERE scope=? AND id=?', (scope, evidence_id)).fetchone()

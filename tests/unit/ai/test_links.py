@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sandbox_ai.cli import demo, stats
-from sandbox_ai.evidence import collect, read_span, MAX_READ
+from sandbox_ai.evidence import collect, quote_line, read_span, MAX_READ
 from sandbox_ai.models import AnalysisError, canonical
 from sandbox_ai.service import Analyzer, validate_analysis
 from sandbox_ai.store import Store
@@ -47,7 +47,7 @@ def answer(messages, index=0):
     item = json.loads(messages[1]['content'])['evidence'][index]
     return dict(role='assistant', content=canonical(dict(summary='summary',
         facts=[dict(statement='observed', citations=[dict(id=item['id'],
-                                                          quote=item['text'][:60])])],
+                                                          quote=quote_line(item['text']))])],
         hypotheses=[], missing_info=[], next_steps=[])))
 
 
@@ -101,11 +101,12 @@ class CitationRules(unittest.TestCase):
         with self.assertRaisesRegex(AnalysisError, 'at least 8'):
             validate_analysis(value, {'ev-1': item})
 
-    def test_reflowed_json_quote_is_accepted(self):
-        # Models reflow compact JSON when they quote it; only whitespace may differ.
+    def test_reflowed_json_quote_within_one_line_is_accepted(self):
+        # Models reflow compact JSON when they quote it; within one line only whitespace
+        # may differ.
         text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
         value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='"summary":"oom","verdict":"harness_error"')])],
+                     citations=[dict(id='ev-1', quote='"summary":"oom",')])],
                      hypotheses=[], missing_info=[], next_steps=[])
         validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
 
@@ -114,15 +115,24 @@ class CitationRules(unittest.TestCase):
         value = dict(summary='s', facts=[dict(statement='observed',
                      citations=[dict(id='ev-1', quote='"summary": "out of memory"')])],
                      hypotheses=[], missing_info=[], next_steps=[])
-        with self.assertRaisesRegex(AnalysisError, 'verbatim'):
+        with self.assertRaisesRegex(AnalysisError, 'single line'):
             validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
 
-    def test_double_escaped_quote_is_accepted(self):
-        # A model can escape a quote once too often inside its JSON; unescaping recovers
-        # exactly the characters that are in the evidence.
+    def test_quote_spanning_two_real_lines_is_rejected(self):
+        # The failure that motivated this rule: both halves exist, but not next to each other.
         text = '{\n  "exit_code": 0,\n  "verdict": "ok"\n}'
         value = dict(summary='s', facts=[dict(statement='observed',
                      citations=[dict(id='ev-1', quote='"exit_code": 0,\\n  "verdict": "ok"')])],
+                     hypotheses=[], missing_info=[], next_steps=[])
+        with self.assertRaisesRegex(AnalysisError, 'single line'):
+            validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+
+    def test_double_escaped_quote_within_one_line_is_accepted(self):
+        # A model can escape a quote once too often inside its JSON; unescaping recovers
+        # exactly the characters that are on that line.
+        text = '{\n  "stdout": {"eof": true}\n}'
+        value = dict(summary='s', facts=[dict(statement='observed',
+                     citations=[dict(id='ev-1', quote='\\"stdout\\": {\\"eof\\": true}')])],
                      hypotheses=[], missing_info=[], next_steps=[])
         validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
 
@@ -183,7 +193,7 @@ class OriginsAndVerification(unittest.TestCase):
             payload = json.loads([m for m in messages if m['role'] == 'tool'][-1]['content'])
             return dict(role='assistant', content=canonical(dict(summary='read',
                 facts=[dict(statement='the log names the symbol',
-                            citations=[dict(id=payload['id'], quote=payload['text'][:20])])],
+                            citations=[dict(id=payload['id'], quote=quote_line(payload['text'], 20))])],
                 hypotheses=[], missing_info=[], next_steps=[])))
         provider = Reply([call('read_output', dict(stream='stderr.bin', offset=0, length=20)), cite_span])
         result = Analyzer(self.store, provider).analyze('p', 'run-run-current', 'show the log')
@@ -201,6 +211,23 @@ class OriginsAndVerification(unittest.TestCase):
 
 
 class Aggregates(unittest.TestCase):
+    def test_corpus_cache_is_dropped_when_a_bundle_is_added(self):
+        # The corpus read used to happen on every query and every search_history call; the
+        # cache must never serve a list that predates an import.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = Store(root/'state.db')
+            try:
+                store.put_bundle(collect('p', run_dir(root/'a', 'run-a', stderr=b'first failure\n')))
+                first = [e.run_id for e in store.corpus('p')]
+                self.assertIn('run-run-a', first)
+                store.put_bundle(collect('p', run_dir(root/'b', 'run-b', stderr=b'second failure\n')))
+                self.assertIn('run-run-b', [e.run_id for e in store.corpus('p')])
+                self.assertTrue([hit for hit in store.search('p', 'second failure')
+                                 if hit['evidence']['run_id'] == 'run-run-b'])
+            finally:
+                store.close()
+
     def test_stats_counts_what_was_recorded(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

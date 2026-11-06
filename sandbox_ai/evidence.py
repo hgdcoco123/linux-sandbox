@@ -145,6 +145,19 @@ def render_summary(execution):
     return lines
 
 
+def quote_line(text, limit=160):
+    """One whole line, trimmed: the only kind of quote a citation may use.
+
+    Keeping this next to the extractor means the demo provider and the tests quote the way a
+    real model has to, instead of drifting back to "first N characters" and crossing lines.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if len(line) >= 8:
+            return line[:limit]
+    return text.strip()[:limit]
+
+
 def chunks(scope, run_id, kind, source, text, location='text', truncated=False):
     text = redact(text)
     for start in range(0, len(text), 1600):
