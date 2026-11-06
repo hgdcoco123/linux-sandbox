@@ -15,6 +15,7 @@ the sandbox, so a dry run works on a host that cannot do isolation.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -122,7 +123,10 @@ def main(argv=None):
         return 0
 
     state = work/'state'
-    state.mkdir(parents=True, exist_ok=True)
+    # The sandbox refuses a state root that is not private: mkdir's mode is advisory and
+    # only applies on creation, so set it explicitly as well.
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(state, 0o700)
     completed = subprocess.run([str(args.sandbox.resolve()), 'run', '--config', str(current),
                                 '--state-root', str(state)],
                                capture_output=True, text=True, timeout=120)
@@ -132,7 +136,10 @@ def main(argv=None):
         report = json.loads(completed.stdout)
         run_id = report['run_id']
     except (ValueError, KeyError, TypeError):
-        print('FAIL: the analysed run produced no report; see ' + str(work), file=sys.stderr)
+        reason = (completed.stderr or completed.stdout).strip().splitlines()
+        print('FAIL: the analysed run produced no report: ' +
+              (reason[-1] if reason else 'no output'), file=sys.stderr)
+        print('FAIL: see ' + str(work), file=sys.stderr)
         return 1
     store = Store(work/'state.db')
     try:
