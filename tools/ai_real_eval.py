@@ -68,11 +68,18 @@ def main(argv=None):
         provider = make_provider(args)
         print('== provider: ' + getattr(provider, 'identity', args.provider), file=sys.stderr)
         runs = args.runs[:args.limit] if args.limit else args.runs
-        # Rough cost preview: prompt characters are the dominant term, and a provider
-        # bills per token; 4 characters per token is the usual rule of thumb.
+        # Rough cost preview: prompt characters are the dominant term, and a provider bills
+        # per token; 4 characters per token is the usual rule of thumb. A missing result.json
+        # means "cannot estimate", not a crash - /tmp gets cleaned between sessions.
+        chars = 0
+        for path in runs:
+            try:
+                chars += len(Path(path, 'result.json').read_text())
+            except OSError:
+                chars = chars or 0
         print('== cases: ' + str(len(runs)) + ', rough prompt estimate: ' +
-              str(sum(len(Path(p, 'result.json').read_text()) for p in runs) // 4) +
-              ' tokens before any tool call or repair', file=sys.stderr)
+              (str(chars // 4) + ' tokens before any tool call or repair' if chars
+               else 'unavailable (missing result.json)'), file=sys.stderr)
         for path in runs:
             bundle = collect(args.scope, Path(path),
                              context='评估用例：一条已经完成的真实运行。')
