@@ -210,6 +210,21 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 
 
 
+## 1.0 三项补完（已实现，Linux 验证待跑）
+
+上一轮审查列出三个功能缺口，现已实现并有用例覆盖（Windows 本地 78 项通过、5 项 POSIX-only 跳过）：
+
+| 缺口 | 实现 | 用例 |
+|---|---|---|
+| 假设状态没有回写 | 可选 `hypothesis_updates`；"支持/反驳"必须引用验证运行的证据；写入 `hypothesis_status`，下一轮以 `known_hypotheses` 可见；`stats` 输出 `hypotheses` 计数 | `test_finish.HypothesisUpdates` 6 条 |
+| 验证不能消费本次运行的输入 | 模板配置支持 `${run_dir}`（程序替换，模型无法提供路径）；缺 run_dir 时明确报错 | `test_finish.Substitution` 3 条 + `test_e2e_driver` |
+| 慢调用无反馈 | 阻塞请求期间 5 秒一次心跳，`--quiet` 关闭；非 TTY 不打印 | 由 `providers._tick` 覆盖（不写测试，避免睡 5 秒） |
+| 无重试 | 429/5xx/超时重试 ≤2 次，尊重 `Retry-After`（上限 5 秒）；400 等不重试 | `test_finish.Retry` 3 条 |
+
+**注意**：以上完成的 Linux 端复验（`bash verify.sh`、`ai-check`、真实模型测量）在提交时**未执行**——
+当时虚拟机不可达（`192.168.244.128:8000` 无响应）。Windows 上 78 项通过；POSIX-only 的 5 项
+（符号链接、假沙箱执行）需要 Linux 上补跑。
+
 ## 未验证
 
 - **诊断质量的普适性**：`qwen-plus` 三轮 1/4、1/4、0/4（引用拼接）；`qwen3.8-max` 3/4、结论 3/3 正确。

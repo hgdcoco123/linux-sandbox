@@ -8,6 +8,7 @@ are checked on every run of the suite.
 """
 import json
 import os
+import sys
 from pathlib import Path
 import stat
 import tempfile
@@ -44,8 +45,13 @@ print(json.dumps(report))
 '''
 
 
+@unittest.skipIf(os.name != 'posix', 'the fake sandbox is a shebang script')
 class DrillTests(unittest.TestCase):
     def setUp(self):
+        # The executor refuses non-Linux hosts; these tests replace the sandbox anyway.
+        patcher = patch('sandbox_ai.verification.sys.platform', 'linux')
+        self.addCleanup(patcher.stop)
+        patcher.start()
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             'ai_verify_e2e', Path(__file__).resolve().parents[3]/'tools'/'ai_verify_e2e.py')

@@ -49,6 +49,9 @@ class Store:
           CREATE TABLE IF NOT EXISTS verifications(scope TEXT, analysis_id TEXT, proposal_id TEXT,
             run_id TEXT, body TEXT, PRIMARY KEY(scope,analysis_id,proposal_id,run_id));
           CREATE INDEX IF NOT EXISTS verifications_scope ON verifications(scope,analysis_id);
+          CREATE TABLE IF NOT EXISTS hypothesis_status(scope TEXT, statement TEXT, status TEXT,
+            run_id TEXT, analysis_id TEXT, body TEXT);
+          CREATE INDEX IF NOT EXISTS hypothesis_scope ON hypothesis_status(scope);
         ''')
 
     def close(self):
@@ -188,6 +191,21 @@ class Store:
         rows = self.db.execute('SELECT body FROM analyses WHERE scope=? ORDER BY rowid',
                                (scope,)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    # A hypothesis is only settled if the outcome is recorded somewhere other than a
+    # conversation: "run X supported hypothesis H" becomes a row, and a later turn can see it.
+    def save_hypothesis_updates(self, scope, analysis_id, updates):
+        with self.db:
+            for update in updates:
+                body = dict(update, analysis_id=analysis_id, scope=scope)
+                self.db.execute('INSERT INTO hypothesis_status VALUES(?,?,?,?,?,?)',
+                                (scope, str(update['statement'])[:500], str(update['status']),
+                                 str(update.get('run_id') or ''), analysis_id, canonical(body)))
+
+    def hypothesis_history(self, scope, limit=8):
+        rows = self.db.execute('SELECT body FROM hypothesis_status WHERE scope=? '
+                               'ORDER BY rowid DESC LIMIT ?', (scope, limit)).fetchall()
+        return [json.loads(row[0]) for row in reversed(rows)]
 
     # A verification run is what turns a proposal into a fact: it has to be reachable from
     # the conversation that proposed it, otherwise the next analyze can only guess that the

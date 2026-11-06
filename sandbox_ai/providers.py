@@ -1,6 +1,8 @@
 """Verified-TLS chat/tools + embedding transport; no secrets in persisted state."""
 import json
 import os
+import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
@@ -18,7 +20,7 @@ class NoRedirect(HTTPRedirectHandler):
 class CompatibleProvider:
     def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=90,
                  allow_local_http=False, max_tokens=3000, rerank_model='',
-                 rerank_path='/rerank'):
+                 rerank_path='/rerank', retries=2, progress=None):
         parsed = urlsplit(base_url)
         local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
         if (parsed.scheme != 'https' and not (allow_local_http and local and parsed.scheme == 'http')
@@ -51,28 +53,82 @@ class CompatibleProvider:
         # from the path rather than hardcoded to one vendor.
         self.rerank_path = rerank_path
         self.origin = parsed.scheme + '://' + parsed.netloc
+        self.retries = max(0, min(int(retries), 3))
+        self.progress = progress
+        self._thread = None
+        self._stop = threading.Event()
         self.usage = []
 
     def post(self, endpoint, payload):
         url = endpoint if endpoint.startswith('http') else self.base + endpoint
         request = Request(url, data=canonical(payload).encode(),
-                          headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.key})
-        try:
-            with build_opener(NoRedirect()).open(request, timeout=self.timeout) as response:
-                body = response.read(2 * 1024 * 1024 + 1)
-                if len(body) > 2 * 1024 * 1024:
-                    raise AnalysisError('Model response exceeds byte budget')
-                result = json.loads(body)
-        except HTTPError as error:
-            raise AnalysisError(f'Model HTTP {error.code}; response body omitted') from None
-        except (URLError, TimeoutError, OSError, ValueError):
-            raise AnalysisError('Model transport or JSON response failed') from None
+                          headers={'Content-Type': 'application/json',
+                                   'Authorization': 'Bearer ' + self.key})
+        # A model call is idempotent at temperature 0, so a transient 429/5xx/timeout can be
+        # retried instead of failing the whole analysis. Retries are bounded: at most
+        # `retries` extra attempts, and the caller's deadline still applies to the analysis.
+        attempt = 0
+        while True:
+            self._tick(True)
+            try:
+                with build_opener(NoRedirect()).open(request, timeout=self.timeout) as response:
+                    body = response.read(2 * 1024 * 1024 + 1)
+                    if len(body) > 2 * 1024 * 1024:
+                        raise AnalysisError('Model response exceeds byte budget')
+                    result = json.loads(body)
+                self._tick(False)
+                break
+            except HTTPError as error:
+                self._tick(False)
+                if error.code in (429, 500, 502, 503, 504) and attempt < self.retries:
+                    self._pause(attempt, error.headers.get('Retry-After') if error.headers else None)
+                    attempt += 1
+                    continue
+                raise AnalysisError(f'Model HTTP {error.code}; response body omitted') from None
+            except (URLError, TimeoutError, OSError) as error:
+                self._tick(False)
+                if attempt < self.retries:
+                    self._pause(attempt, None)
+                    attempt += 1
+                    continue
+                raise AnalysisError('Model transport or JSON response failed') from None
+            except ValueError:
+                self._tick(False)
+                raise AnalysisError('Model transport or JSON response failed') from None
         usage = result.get('usage', {}) if isinstance(result, dict) else {}
         if not isinstance(result, dict):
             raise AnalysisError('Model response must be an object')
         if isinstance(usage, dict):
             self.usage.append({k: v for k, v in usage.items() if type(v) in (int, float)})
         return result
+
+    def _pause(self, attempt, retry_after):
+        delay = (1.0, 3.0)[min(attempt, 1)]
+        try:
+            if retry_after is not None:
+                delay = min(float(retry_after), 5.0)
+        except (TypeError, ValueError):
+            pass
+        time.sleep(delay)
+
+    def _tick(self, running):
+        """Heartbeat a blocking request: the progress callback, if any, prints a line."""
+        if not self.progress:
+            return
+        if running:
+            self._stop = threading.Event()
+            def beat():
+                started = time.monotonic()
+                while not self._stop.wait(5.0):
+                    self.progress('waiting for ' + self.model + ' (' +
+                                  str(int(time.monotonic() - started)) + 's)')
+            self._thread = threading.Thread(target=beat, daemon=True)
+            self._thread.start()
+        else:
+            self._stop.set()
+            if self._thread:
+                self._thread.join(timeout=0.2)
+                self._thread = None
 
     def complete(self, messages, tools):
         payload = dict(model=self.model, messages=messages, temperature=0,

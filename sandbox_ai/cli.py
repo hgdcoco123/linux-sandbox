@@ -14,16 +14,24 @@ from .store import Store
 from .verification import Templates, execute
 
 
+def _progress(message):
+    """A heartbeat for slow models: one line per five seconds, on a terminal only."""
+    if sys.stderr.isatty():
+        print('… ' + message, file=sys.stderr, flush=True)
+
+
 def provider(args):
     if args.provider == 'demo':
         if args.semantic or getattr(args, 'rerank', False):
             raise AnalysisError('Demo does not simulate embeddings or a reranker; use a real provider')
         return DemoProvider()
+    progress = None if getattr(args, 'quiet', False) else _progress
     return CompatibleProvider(args.base_url, args.model, args.embedding_model,
                               key_env=args.key_env, allow_local_http=args.allow_local_http,
                               rerank_model=os.environ.get('SANDBOX_AI_RERANK_MODEL', '')
                               if getattr(args, 'rerank', False) else '',
-                              rerank_path=os.environ.get('SANDBOX_AI_RERANK_PATH', '/rerank'))
+                              rerank_path=os.environ.get('SANDBOX_AI_RERANK_PATH', '/rerank'),
+                              progress=progress)
 
 
 def parser():
@@ -35,6 +43,7 @@ def parser():
     p.add_argument('--model', default=os.environ.get('SANDBOX_AI_MODEL', ''))
     p.add_argument('--embedding-model', default=os.environ.get('SANDBOX_AI_EMBEDDING_MODEL', ''))
     p.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
+    p.add_argument('--quiet', action='store_true', help='No progress heartbeat on stderr')
     p.add_argument('--allow-local-http', action='store_true')
     p.add_argument('--semantic', action='store_true', help='Use real embedding vectors with lexical retrieval')
     p.add_argument('--rerank', action='store_true',
@@ -110,7 +119,10 @@ def stats(store, scope):
                 retrieval_modes=sorted({m.get('retrieval') for m in metrics if m.get('retrieval')}),
                 average_citations=round(total('citations') / len(completed), 2) if completed else None,
                 verifications=len(store.db.execute(
-                    'SELECT 1 FROM verifications WHERE scope=?', (scope,)).fetchall()))
+                    'SELECT 1 FROM verifications WHERE scope=?', (scope,)).fetchall()),
+                hypotheses={status: count for status, count in store.db.execute(
+                    'SELECT status, COUNT(*) FROM hypothesis_status WHERE scope=? GROUP BY status',
+                    (scope,)).fetchall()})
 
 
 def demo(store, scope, output):

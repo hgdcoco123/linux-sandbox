@@ -65,6 +65,28 @@ def child_environment():
             if name not in dropped and not pattern.search(name)}
 
 
+def substitute(config, run_dir):
+    """Fill `${run_dir}` with the analysed run's directory, everywhere in the template.
+
+    A verification that checks the *input* of a failing run ("would this archive unpack
+    again?") has to be able to point at that run's files. The placeholder is the only thing
+    substituted, and its value is a path the program computed - never a path from the model -
+    so the operator's registry stays the authority on what runs.
+    """
+    if isinstance(config, str):
+        if '${run_dir}' in config:
+            if not run_dir:
+                raise AnalysisError('This template needs the run directory, but the snapshot '
+                                    'did not record one; re-import the run')
+            return config.replace('${run_dir}', run_dir)
+        return config
+    if isinstance(config, list):
+        return [substitute(item, run_dir) for item in config]
+    if isinstance(config, dict):
+        return {key: substitute(value, run_dir) for key, value in config.items()}
+    return config
+
+
 def execute(store, scope, analysis_id, proposal_id, templates, binary, output_dir):
     if sys.platform != 'linux':
         raise AnalysisError('Sandbox verification requires Linux; no process fallback')
@@ -79,10 +101,13 @@ def execute(store, scope, analysis_id, proposal_id, templates, binary, output_di
     template = templates.get(proposal['template_id'])
     if template['digest'] != proposal['template_digest']:
         raise AnalysisError('Template changed since proposal; generate a new proposal')
+    # Older analyses may predate run_id; a template without ${run_dir} still works for them.
+    run_dir = store.bundle(scope, analysis['run_id']).run_dir if analysis.get('run_id') else ''
+    config = substitute(template['config'], run_dir)
     root = Path(output_dir).resolve()
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
     config_path = root / 'config.json'
-    config_path.write_text(json.dumps(template['config']), encoding='utf-8')
+    config_path.write_text(json.dumps(config), encoding='utf-8')
     state = root / 's'
     state.mkdir(mode=0o700)
     from sdk.launch import plan_launch
@@ -125,6 +150,7 @@ def execute(store, scope, analysis_id, proposal_id, templates, binary, output_di
     store.put_bundle(bundle)
     receipt = dict(schema_version=1, analysis_id=analysis_id, proposal_id=proposal_id,
                    template_digest=template['digest'], run_id=run_id, cli_exit=process.returncode,
+                   hypothesis=proposal.get('hypothesis', ''),
                    execution=bundle.execution, status='executed_not_automatically_confirmed')
     (root / 'verification.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
     # Recorded in the store as well, so the conversation that proposed it can see that the
