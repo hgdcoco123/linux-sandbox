@@ -57,6 +57,7 @@ def main(argv=None):
     parser.add_argument('--max-tokens', type=int, default=3000, help='answer budget per request')
     parser.add_argument('--deadline', type=int, default=180, help='wall deadline for one analysis, seconds')
     parser.add_argument('--rerank', action='store_true', help='Second stage rerank of the fused candidates')
+    parser.add_argument('--limit', type=int, default=0, help='Only run the first N cases (cost guard)')
     args = parser.parse_args(argv)
 
     work = args.db.parent if args.db else Path(tempfile.mkdtemp(prefix='sbx-ai-eval-'))
@@ -66,7 +67,13 @@ def main(argv=None):
     try:
         provider = make_provider(args)
         print('== provider: ' + getattr(provider, 'identity', args.provider), file=sys.stderr)
-        for path in args.runs:
+        runs = args.runs[:args.limit] if args.limit else args.runs
+        # Rough cost preview: prompt characters are the dominant term, and a provider
+        # bills per token; 4 characters per token is the usual rule of thumb.
+        print('== cases: ' + str(len(runs)) + ', rough prompt estimate: ' +
+              str(sum(len(Path(p, 'result.json').read_text()) for p in runs) // 4) +
+              ' tokens before any tool call or repair', file=sys.stderr)
+        for path in runs:
             bundle = collect(args.scope, Path(path),
                              context='评估用例：一条已经完成的真实运行。')
             store.put_bundle(bundle)
