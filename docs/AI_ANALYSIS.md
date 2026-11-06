@@ -261,8 +261,18 @@ store = Store('/tmp/analysis.sqlite3')
 try:
     bundle = collect('project', '/path/to/completed/run', context='任务要求……')
     store.put_bundle(bundle)
-    provider = CompatibleProvider('https://YOUR-ENDPOINT/v1', 'YOUR-MODEL')
-    result = Analyzer(store, provider).analyze('project', bundle.run_id, '失败原因是什么？')
+    provider = CompatibleProvider('https://YOUR-ENDPOINT/v1', 'YOUR-MODEL',
+                                  embedding_model='YOUR-EMBEDDING',
+                                  rerank_model='YOUR-RERANK')      # 可选，两阶段检索
+    result = Analyzer(store, provider, semantic=True, reranker=provider).analyze(
+        'project', bundle.run_id, '失败原因是什么？')
+    for item in result['resolved_citations']:                     # 程序解析出的真实原文
+        print(item['id'], 'L' + str(item['line']), item['text'])
+    print(result['metrics'])                                       # 含 retrieval / reranked / origins
 finally:
     store.close()
 ```
+
+`result['analysis']['hypothesis_updates']` 存在时表示这一轮把先前假设判成了
+supported / refuted / unknown；它已被写入 `hypothesis_status`，下一轮会作为
+`known_hypotheses` 出现在提示里。

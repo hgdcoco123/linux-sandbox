@@ -213,13 +213,20 @@ process 诊断模式不读取整机数据冒充本次资源消耗。详见 [docs
 ## 通用 AI 执行分析层（0.1）
 
 新增独立的 `sandbox_ai` Python 包：执行证据（含 `internal.log` 生命周期日志）、结构化分析、
-混合检索/RAG、有界工具调用（含按区间重读输出流）、多轮上下文、每条分析的 `metrics` 与 `stats` 聚合。
-受控验证通过现有 SDK 调用隔离沙箱，并把验证结果记入库，使下一次追问能看到"哪条提案、由哪条运行验证过"。
-不修改执行核心和原始报告。
+两阶段检索（BM25 / 向量 → RRF → rerank）、有界工具调用（含按区间重读输出流）、多轮上下文、
+每条分析的 `metrics` 与 `stats` 聚合。
 
-- 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`）
+- **引用是行地址**：证据以 `{"id","lines"}` 供给，模型只回 `{"id","line"}`，原文由程序解析
+  （`resolved_citations`）——模型没有伪造引用文本的通道。
+- **假设状态闭合**：可选的 `hypothesis_updates`（supported / refuted / unknown）必须引用验证运行
+  的证据，并记入库；`stats` 汇总。
+- 受控验证通过现有 SDK 调用隔离沙箱，模板支持 `${run_dir}` 引用本次运行的产物；回执标注
+  "已执行未自动证实"。不修改执行核心和原始报告。
+
+- 一条命令看失败：`python -m sandbox_ai --provider compatible explain --run-dir <run>`
+- 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`，78 项）
 - 端到端自检：`bash tools/ai-check.sh`（契约 + 离线 demo + 指标断言）
-- 验证闭环演练：`bash tools/ai-verify-e2e.sh`（由操作者本人运行；真实隔离执行一次验证模板）
+- 验证闭环演练：`bash tools/ai-verify-e2e.sh`（由操作者本人运行；真实隔离执行验证模板）
 - 从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)，
   已执行/未执行的验证记录见 [AI_VALIDATION.md](docs/AI_VALIDATION.md)。
 离线演示及测试不等于真实模型或 Linux 隔离验收。
