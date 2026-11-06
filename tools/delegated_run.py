@@ -37,29 +37,14 @@ if needs_isolation:
                 ": " + str(probe.get("error", "unknown error")) +
                 ". No policy was changed. See docs/DEPLOYMENT.md; full doctor output: " +
                 json.dumps(probe, ensure_ascii=False))
-entry = next((line[3:] for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::")), None)
-if not entry:
-    p.error("unified cgroup v2 required")
-parent = Path("/sys/fs/cgroup") / entry.lstrip("/")
-if parent == Path("/sys/fs/cgroup"):
-    p.error("refusing to change global cgroup; start under systemd-run -p Delegate=yes")
-controllers = set((parent / "cgroup.controllers").read_text().split())
-if not {"cpu", "memory", "pids"} <= controllers:
-    p.error("delegated scope does not expose cpu/memory/pids controllers")
-processes = (parent / "cgroup.procs").read_text().split()
-if processes != [str(os.getpid())]:
-    p.error("delegated service must initially contain only this wrapper")
-control = parent / "supervisor"
-runs = parent / "runs"
-control.mkdir()
-(control / "cgroup.procs").write_text(str(os.getpid()))
-enabled = ["cpu", "memory", "pids"]
-if "io" in controllers:
-    enabled.append("io")  # Optional observation only; no I/O hard limit is configured.
-control_flags = " ".join("+" + name for name in enabled)
-(parent / "cgroup.subtree_control").write_text(control_flags)
-runs.mkdir()
-(runs / "cgroup.subtree_control").write_text(control_flags)
+# The cgroup layout lives in one module so the AI end-to-end driver prepares exactly the
+# same subtree instead of keeping a copy that can drift.
+from delegated_cgroup import prepare
+
+try:
+    runs = prepare()
+except RuntimeError as error:
+    p.error(str(error))
 binary = str(a.sandbox.resolve())
 if a.test_runtime:
     env = dict(os.environ, SANDBOX_TEST_RUNTIME=str(a.test_runtime.resolve()), SANDBOX_TEST_CGROUP=str(runs))

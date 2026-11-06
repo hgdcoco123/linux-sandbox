@@ -197,6 +197,19 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo verify \
 `executed_not_automatically_confirmed`），该运行的报告以 `origin=verification` 进入上下文，
 模型可以引用它、也必须把它当“关于提案的证据”而不是“关于本次运行的证据”。
 
+### 一次跑完整条链路
+
+```bash
+# 由操作者本人运行（脚本内部自己调 sudo），不要加 sudo
+bash tools/ai-verify-e2e.sh
+```
+
+它按 `tools/isolated-accept.sh` 同样的方式放行/恢复 host 策略，然后在委派单元里演完整条链路：
+执行一次真实隔离运行 → 导入 → 脚本化模型提出登记模板 → 真实执行 `verify`（隔离、离线、有界）
+→ 断言回执入库且状态仍是 `executed_not_automatically_confirmed` → 下一次追问能看到
+`verification_context` 且能引用验证运行（`origin=verification`）的证据 → 打印 `stats`。
+`--dry-run` 只校验配置、模板登记和摘要，不碰沙箱也不改 host 策略。
+
 ## 7. 测试与目前的边界
 
 49 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo

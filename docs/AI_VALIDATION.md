@@ -9,7 +9,6 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-
 结果：**49 项全部通过**（证据 15、分析 14、检索 5、传输 5、验证 6、新增链路 4，按文件计
 `test_analysis.py` 29 / `test_links.py` 9 / `test_transport.py` 5 / `test_verification.py` 6）。
 Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
@@ -26,6 +25,10 @@ ctest --test-dir build
 `tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 49 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
+
+`bash tools/ai-verify-e2e.sh --dry-run` 已执行：配置生成、模板登记、摘要锁定这三步通过，
+输出 `AI VERIFY E2E DRY RUN OK`。**完整链路（真实隔离执行）尚未执行**——它需要操作者本人运行
+`bash tools/ai-verify-e2e.sh`（脚本内部调 sudo 放行/恢复 sysctl），见下方"未验证"。
 
 离线 demo 仍生成编译失败、CSV 结构问题、超时三类**合成**证据；`DemoProvider` 是确定性测试替身，
 不代表 AI 诊断效果。
