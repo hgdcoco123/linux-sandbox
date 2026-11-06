@@ -216,7 +216,7 @@ bash tools/ai-verify-e2e.sh
 
 ## 7. 测试与目前的边界
 
-57 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo
+61 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo
 和 `stats` 断言。测试覆盖证据截断/缺失、`internal.log` 导入、区间读取边界、CSV结构、脱敏、
 路径/链接拒绝、scope、缓存失效、向量模型版本、真实HTTP请求格式的模拟传输、工具越权、
 引用过短与错误引用修复、模型故障、调用预算、多轮上下文、`origin` 标记、验证结果的可见性、
