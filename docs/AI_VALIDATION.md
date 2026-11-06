@@ -52,11 +52,38 @@ ctest --test-dir build
 - 指标：每条分析记录 `metrics`（修复次数、工具调用/拒绝、引用数、检索方式、语义退化、来源分布、
   上下文规模、耗时），`stats` 在 scope 内聚合出合格率与越权计数。
 
+## 受控验证闭环（真机，已执行）
+
+2026-11-06，操作者本人执行（脚本内部只对 sysctl 用 sudo）：
+
+```bash
+cd ~/sbx3 && bash tools/ai-verify-e2e.sh
+```
+
+结果：`AI VERIFY E2E PASSED`，四条必检行全部出现，`restored
+kernel.apparmor_restrict_unprivileged_userns=1`。
+
+| 观察项 | 值 |
+|---|---|
+| 被分析的运行 | `run-847dea0dcbb654874ed4d4c8`，`summary=nonzero_exit`、`exit 43`（真实的隔离执行） |
+| 验证运行 | `run-6f7b69c71db1ca8d52708f4a`，`cli_exit=0`、`exit_code=0`、`verdict=ok` |
+| 隔离与清理 | `isolated=true`；`cgroup_removed`、`descendants_empty`、`launcher_reaped` 均为真，`cleanup.errors=[]` |
+| 回执 | `status=executed_not_automatically_confirmed`（验证成功也不自动升级为"假设已证实"） |
+| 产物 | 验证程序在挂载的私有目录里写出了 `value`（10 字节），说明那次执行是真的发生在沙箱里 |
+| 第二次追问 | 输入里出现 `verification_context`（该 run、该模板摘要），证据来源 `{current: 5, verification: 2}`，引用验证证据通过校验 |
+| 聚合 | `stats`：`analyses=2`、`completed=2`、`structured_output_rate=1.0`、`tool_denied=0`、`verifications=1` |
+
+同一天的更早一次尝试（模板还没挂 `/output`）验证程序自身以 41 失败，回执依然是
+`executed_not_automatically_confirmed`——这说明状态不取决于目标成功与否，但那次不能当作
+"验证通过"的记录，所以只保留为过程事实。
+
+这次真机执行还暴露了 4 个 harness 侧的缺陷（状态目录 0755、可选参数被当函数调用、模板缺
+`schema_version`、模板缺 `/output` 挂载），都已修在提交里；沙箱和 AI 逻辑本身没有发现问题。
+
 ## 未验证
 
 - 真实服务商的生成、embedding、工具调用兼容性、用量统计和**诊断质量**。
-- Linux 上真实执行验证模板（namespace/cgroup/systemd 委派）以及该程序的清理与产物回收；
-  执行器目前只用假 launch plan 与假子进程验证调用契约。
+- 验证模板的其它边界（超时、模板变更拒绝、目标失败）只在契约测试里验证过；真机只跑过成功的一次。
 - 真实模型面对提示注入、错误线索和复杂任务时的推断可靠性；离线测试不能证明抗注入能力。
 - Linux 符号链接检查已在本机执行；对**并发**恶意替换目录的抵抗能力仍未验证。
 - 引用校验只证明"这段话确实来自这份证据"，不证明推断正确；`stats` 的合格率衡量格式与引用，
