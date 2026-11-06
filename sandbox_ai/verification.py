@@ -22,6 +22,10 @@ class Templates:
                 raise AnalysisError('Invalid template entry')
             config_path = (path.parent / spec['config']).resolve(strict=True)
             config = json.loads(read_file(config_path.parent, config_path.name, MAX_REPORT, full=True)[0][0][1])
+            # A template the sandbox itself will reject is not a trusted template: catch it
+            # when the registry is read, not after the operator has already executed it.
+            if config.get('schema_version') != 1:
+                raise AnalysisError('Verification templates must declare schema_version 1')
             if config.get('mode') != 'isolated' or config.get('network') != 'none' or config.get('session', {}).get('enabled'):
                 raise AnalysisError('Verification templates must be isolated, offline, single-run')
             limits = config.get('limits', {})

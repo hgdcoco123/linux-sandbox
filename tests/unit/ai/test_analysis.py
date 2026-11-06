@@ -262,7 +262,8 @@ class AnalysisTests(Fixture):
 
 class TemplateTests(Fixture):
     def registry(self, mode='isolated'):
-        config = dict(mode=mode, network='none', runtime_root='/runtime', argv=['/usr/bin/check'],
+        config = dict(schema_version=1, mode=mode, network='none', runtime_root='/runtime',
+                      argv=['/usr/bin/check'],
                       limits=dict(wall_ms=1000, startup_ms=5000, grace_ms=100,
                                   memory_bytes=268435456, pids=32, capture_bytes=4096, tmp_bytes=33554432))
         (self.root/'check.json').write_text(json.dumps(config))

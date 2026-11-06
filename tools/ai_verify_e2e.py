@@ -78,7 +78,7 @@ def current_run_config(runtime, runs, fixture):
 
 
 def template_config(runtime, runs, fixture):
-    return dict(mode='isolated', network='none', runtime_root=str(runtime),
+    return dict(schema_version=1, mode='isolated', network='none', runtime_root=str(runtime),
                 cgroup_root=str(runs), argv=[fixture, 'session-write'],
                 limits=dict(LIMITS))
 

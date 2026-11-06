@@ -18,7 +18,8 @@ class VerificationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.store = Store(self.root/'state.db')
-        config = dict(mode='isolated', network='none', runtime_root='/runtime', argv=['/usr/bin/check'],
+        config = dict(schema_version=1, mode='isolated', network='none', runtime_root='/runtime',
+                      argv=['/usr/bin/check'],
                       limits=dict(wall_ms=1000, startup_ms=5000, grace_ms=100,
                                   memory_bytes=268435456, pids=32, capture_bytes=4096, tmp_bytes=33554432))
         (self.root/'config.json').write_text(json.dumps(config))
@@ -107,6 +108,13 @@ class VerificationTests(unittest.TestCase):
         self.assertNotIn('AWS_SECRET_ACCESS_KEY', env)
         self.assertEqual(env['XDG_RUNTIME_DIR'], '/run/user/1000')
         self.assertEqual(env['PATH'], '/usr/bin')
+
+    def test_config_the_sandbox_would_reject_is_refused_up_front(self):
+        broken = json.loads((self.root/'config.json').read_text())
+        del broken['schema_version']
+        (self.root/'config.json').write_text(json.dumps(broken))
+        with self.assertRaisesRegex(AnalysisError, 'schema_version'):
+            Templates(self.root/'templates.json')
 
     def test_changed_template_cannot_execute(self):
         self.templates.items['check']['digest'] = 'different'

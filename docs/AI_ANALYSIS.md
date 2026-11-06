@@ -155,6 +155,7 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
 ## 6. 受控验证闭环（Linux）
 
 操作者预先准备一个可信的isolated配置，例如只打印某个依赖版本。配置必须：
+- 声明 `schema_version: 1`（沙箱本身也会拒；登记时先查，避免执行到一半才发现）。
 - mode=isolated，network=none，非持续会话；argv、挂载和输入由操作者固定。
 - 显式给出wall_ms<=30000、startup_ms<=15000、grace_ms<=2000、
   memory_bytes<=1GiB、pids<=128、capture_bytes<=1MiB、tmp_bytes<=128MiB。
