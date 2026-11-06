@@ -15,15 +15,21 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class CompatibleProvider:
-    def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=60,
-                 allow_local_http=False):
+    def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=90,
+                 allow_local_http=False, max_tokens=3000):
         parsed = urlsplit(base_url)
         local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
         if (parsed.scheme != 'https' and not (allow_local_http and local and parsed.scheme == 'http')
                 or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment):
             raise AnalysisError('Use an HTTPS base URL, or explicitly allow loopback HTTP')
-        if not model or not 0 < timeout <= 120:
+        # Both limits are client decisions, not model properties: a thinking model can take
+        # minutes, and an answer with many cited facts needs room. They are parameters with
+        # hard caps so a slow or verbose model fails loudly instead of being mislabelled.
+        if not model or not 0 < timeout <= 180:
             raise AnalysisError('Model and bounded timeout are required')
+        if type(max_tokens) is not int or not 200 <= max_tokens <= 8000:
+            raise AnalysisError('max_tokens must be between 200 and 8000')
+        self.max_tokens = max_tokens
         self.base = base_url.rstrip('/')
         self.model = model
         self.embedding_model = embedding_model
@@ -56,7 +62,8 @@ class CompatibleProvider:
         return result
 
     def complete(self, messages, tools):
-        payload = dict(model=self.model, messages=messages, temperature=0, max_tokens=2400)
+        payload = dict(model=self.model, messages=messages, temperature=0,
+                       max_tokens=self.max_tokens)
         if tools:
             payload.update(tools=tools, tool_choice='auto', parallel_tool_calls=False)
         response = self.post('/chat/completions', payload)

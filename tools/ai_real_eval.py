@@ -34,7 +34,8 @@ def make_provider(args):
     if args.provider == 'demo':
         return DemoProvider()
     return CompatibleProvider(args.base_url, args.model, args.embedding_model,
-                              key_env=args.key_env, allow_local_http=args.allow_local_http)
+                              key_env=args.key_env, allow_local_http=args.allow_local_http,
+                              timeout=args.timeout, max_tokens=args.max_tokens)
 
 
 def main(argv=None):
@@ -49,6 +50,8 @@ def main(argv=None):
     parser.add_argument('--embedding-model', default=os.environ.get('SANDBOX_AI_EMBEDDING_MODEL', ''))
     parser.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
     parser.add_argument('--allow-local-http', action='store_true')
+    parser.add_argument('--timeout', type=int, default=90, help='per-request HTTP timeout, seconds')
+    parser.add_argument('--max-tokens', type=int, default=3000, help='answer budget per request')
     args = parser.parse_args(argv)
 
     work = args.db.parent if args.db else Path(tempfile.mkdtemp(prefix='sbx-ai-eval-'))

@@ -59,6 +59,27 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(AnalysisError):
                     client.complete([], [])
 
+    def test_answer_budget_is_a_bounded_parameter(self):
+        # A thinking model can take minutes and a many-citation answer needs room; both are
+        # client decisions, so they are bounded parameters rather than silent constants.
+        client = self.provider()
+        self.assertEqual(client.max_tokens, 3000)
+        body = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'x'}}]}).encode()
+        with patch('sandbox_ai.providers.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(body)
+            client.complete([{'role': 'user', 'content': 'q'}], [])
+            self.assertEqual(json.loads(factory.return_value.open.call_args.args[0].data)['max_tokens'], 3000)
+        for bad in (199, 8001, True, '3000'):
+            with self.subTest(max_tokens=bad):
+                with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
+                    with self.assertRaises(AnalysisError):
+                        CompatibleProvider('https://example.test/v1', 'chat-test',
+                                           key_env='TEST_AI_KEY', max_tokens=bad)
+        with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
+            with self.assertRaises(AnalysisError):
+                CompatibleProvider('https://example.test/v1', 'chat-test', key_env='TEST_AI_KEY',
+                                   timeout=181)
+
 
 if __name__ == '__main__':
     unittest.main()
