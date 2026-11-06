@@ -77,9 +77,10 @@ def current_run_config(runtime, runs, fixture):
                 limits=dict(wall_ms=1500, startup_ms=5000, grace_ms=200))
 
 
-def template_config(runtime, runs, fixture):
+def template_config(runtime, runs, fixture, output):
     return dict(schema_version=1, mode='isolated', network='none', runtime_root=str(runtime),
                 cgroup_root=str(runs), argv=[fixture, 'session-write'],
+                mounts=[{'source': str(output), 'target': '/output', 'readonly': False}],
                 limits=dict(LIMITS))
 
 
@@ -87,10 +88,13 @@ def write_harness(work, runtime, runs, fixture):
     """Configs an operator would prepare by hand: fixed argv, mounts, bounded limits."""
     templates = work/'templates'
     templates.mkdir(parents=True, exist_ok=True)
+    output = work/'verify-output'
+    output.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(output, 0o700)
     current = work/'current.json'
     current.write_text(json.dumps(current_run_config(runtime, runs, fixture)), encoding='utf-8')
     (templates/'write-probe.json').write_text(
-        json.dumps(template_config(runtime, runs, fixture)), encoding='utf-8')
+        json.dumps(template_config(runtime, runs, fixture, output)), encoding='utf-8')
     (templates/'templates.json').write_text(json.dumps({'write_probe': {
         'description': '使用预先准备的程序检查沙箱能否在 /output 中创建文件',
         'config': 'write-probe.json'}}), encoding='utf-8')
@@ -162,8 +166,24 @@ def main(argv=None):
         if receipt['status'] != 'executed_not_automatically_confirmed':
             print('FAIL: unexpected receipt status ' + str(receipt['status']), file=sys.stderr)
             return 1
-        print('== verification run: ' + receipt['run_id'] + ' cli_exit=' + str(receipt['cli_exit']))
+        execution = receipt['execution']
+        print('== verification run: ' + receipt['run_id'] + ' cli_exit=' + str(receipt['cli_exit']) +
+              ' exit_code=' + str(execution.get('exit_code')) +
+              ' isolated=' + str(execution.get('isolated')))
+        if execution.get('isolated') is not True:
+            print('FAIL: the verification run was not isolated', file=sys.stderr)
+            return 1
+        if (execution.get('cleanup') or {}).get('errors'):
+            print('FAIL: the verification run did not clean up: ' +
+                  json.dumps(execution['cleanup']), file=sys.stderr)
+            return 1
+        if execution.get('exit_code') != 0:
+            print('FAIL: the verification template failed on its own: ' +
+                  json.dumps({k: execution.get(k) for k in ('summary', 'exit_code', 'verdict')}),
+                  file=sys.stderr)
+            return 1
         print('real isolated verification executed')
+        print('verification ran isolated and cleaned up')
 
         verified = store.bundle(args.scope, receipt['run_id'])
         recorded = store.verifications(args.scope, [first['analysis_id']])

@@ -78,6 +78,7 @@ status=${PIPESTATUS[0]}
 
 required=(
     "real isolated verification executed"
+    "verification ran isolated and cleaned up"
     "verification receipt visible to the next turn"
     "verification evidence is citable"
 )
