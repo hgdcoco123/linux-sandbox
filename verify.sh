@@ -42,6 +42,13 @@ echo "== test"
 ctest --test-dir build --output-on-failure
 status=$?
 
+# The analysis layer's contracts are a CTest case above; this covers the part CTest cannot:
+# the offline demo and its aggregate metrics, on any host with Python 3.
+if [ "$status" = 0 ] && command -v python3 >/dev/null 2>&1; then
+    echo "== ai demo"
+    bash tools/ai-check.sh || status=1
+fi
+
 echo
 if [ "$status" = 0 ]; then
     echo "ALL TESTS PASSED"

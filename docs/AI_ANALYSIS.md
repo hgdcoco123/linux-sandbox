@@ -145,7 +145,8 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo analyze \
 
 保留最近三轮摘要、问题和运行ID；历史AI结论仅是上下文，不自动升级为证据。
 聊天上下文不会隐式创建或复用沙箱持续会话。模型最多调用6轮、4次工具，默认上下文
-48000字符上限（不是token计数），180秒检查期限及单次HTTP60秒超时。
+48000字符上限（不是token计数），180秒分析期限；单次HTTP默认90秒、回答预算默认3000 token
+（两者都是参数，上限180秒/8000 token，越界直接报错而不是悄悄截断）。
 期限检查在HTTP调用边界进行，不能中断正在进行的同步请求。
 
 上下文里每条证据都带 `origin`：`current` 是本次运行，`history` 是其他运行，
@@ -213,7 +214,7 @@ bash tools/ai-verify-e2e.sh
 
 ## 7. 测试与目前的边界
 
-49 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo
+55 项契约测试已注册进 CTest（`ai_contracts`），另有 `tools/ai-check.sh` 串起测试、离线 demo
 和 `stats` 断言。测试覆盖证据截断/缺失、`internal.log` 导入、区间读取边界、CSV结构、脱敏、
 路径/链接拒绝、scope、缓存失效、向量模型版本、真实HTTP请求格式的模拟传输、工具越权、
 引用过短与错误引用修复、模型故障、调用预算、多轮上下文、`origin` 标记、验证结果的可见性、
