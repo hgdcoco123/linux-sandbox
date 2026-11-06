@@ -101,6 +101,32 @@ class CitationRules(unittest.TestCase):
         with self.assertRaisesRegex(AnalysisError, 'at least 8'):
             validate_analysis(value, {'ev-1': item})
 
+    def test_reflowed_json_quote_is_accepted(self):
+        # Models reflow compact JSON when they quote it; only whitespace may differ.
+        text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
+        value = dict(summary='s', facts=[dict(statement='observed',
+                     citations=[dict(id='ev-1', quote='"summary":"oom","verdict":"harness_error"')])],
+                     hypotheses=[], missing_info=[], next_steps=[])
+        validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+
+    def test_paraphrased_quote_is_still_rejected(self):
+        text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
+        value = dict(summary='s', facts=[dict(statement='observed',
+                     citations=[dict(id='ev-1', quote='"summary": "out of memory"')])],
+                     hypotheses=[], missing_info=[], next_steps=[])
+        with self.assertRaisesRegex(AnalysisError, 'verbatim'):
+            validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+
+    def test_report_evidence_is_pretty_printed(self):
+        # Compact JSON is hard to quote exactly and hard to read; the report is stored
+        # indented so a model can copy a line instead of re-serialising it.
+        with tempfile.TemporaryDirectory() as temp:
+            folder = run_dir(Path(temp), report=dict(run_id='run-x', summary='oom', metrics=dict(oom=1)))
+            bundle = collect('p', folder)
+            report = [item for item in bundle.evidence if item.kind == 'report'][0]
+            self.assertIn('\n', report.text)
+            self.assertIn('"metrics": {', report.text)
+
 
 class OriginsAndVerification(unittest.TestCase):
     def setUp(self):

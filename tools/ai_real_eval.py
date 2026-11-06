@@ -13,6 +13,7 @@ Three runs are a demonstration, not a measurement of diagnostic quality: the rec
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -43,9 +44,9 @@ def main(argv=None):
     parser.add_argument('--db', type=Path)
     parser.add_argument('--scope', default='eval')
     parser.add_argument('--question', default=QUESTION)
-    parser.add_argument('--base-url', default='')
-    parser.add_argument('--model', default='')
-    parser.add_argument('--embedding-model', default='')
+    parser.add_argument('--base-url', default=os.environ.get('SANDBOX_AI_BASE_URL', ''))
+    parser.add_argument('--model', default=os.environ.get('SANDBOX_AI_MODEL', ''))
+    parser.add_argument('--embedding-model', default=os.environ.get('SANDBOX_AI_EMBEDDING_MODEL', ''))
     parser.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
     parser.add_argument('--allow-local-http', action='store_true')
     args = parser.parse_args(argv)

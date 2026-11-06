@@ -150,7 +150,11 @@ def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):
     if not run_id or len(run_id) > 256 or '\0' in run_id:
         raise AnalysisError('Invalid run identity')
     execution = clean_json(execution)
-    items = [evidence(scope, run_id, 'report', 'result.json', 'execution', canonical(execution))]
+    # Pretty JSON, not the compact canonical form: a model asked to quote evidence reflows
+    # compact JSON into something that is not an exact substring, and a human reading the
+    # evidence is served by line breaks too.
+    items = [evidence(scope, run_id, 'report', 'result.json', 'execution',
+                      json.dumps(execution, ensure_ascii=False, indent=2, sort_keys=True))]
     warnings = []
     for name in ('config.json', 'request.json'):
         try:
