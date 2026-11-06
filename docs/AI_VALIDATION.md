@@ -1,6 +1,6 @@
 # AI 分析层验证记录
 
-> **一句话**：Linux 上 79 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
+> **一句话**：Linux 上 86 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
 > 真实模型在同一批 4 条用例上从 1/4 走到 **4/4**（靠契约演进，不是换模型）；**未验证**：泛化评测
 > （无 held-out 用例）、引用的语义充分性（只验来源真实）、以及"提案→执行→回问"两轮链路在真实模型下的表现。
 
@@ -13,8 +13,8 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-结果：**79 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
-`test_verification.py` 7 / `test_e2e_driver.py` 5 / `test_finish.py` 12）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
+结果：**86 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
+`test_verification.py` 7 / `test_e2e_driver.py` 5 / `test_finish.py` 19）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
 
 同一套测试已注册进 CTest：
 
@@ -25,7 +25,7 @@ ctest --test-dir build
 `ai_contracts` 作为第 34 个测试运行并通过（`100% tests passed, 0 tests failed out of 34`；
 `isolation_integration` 在无 systemd 委派时跳过）。
 
-`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 79 项契约测试、跑离线 demo 并断言
+`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 86 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
 
@@ -225,7 +225,7 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 | 慢调用无反馈 | 阻塞请求期间 5 秒一次心跳，`--quiet` 关闭；非 TTY 不打印 | 由 `providers._tick` 覆盖（不写测试，避免睡 5 秒） |
 | 无重试 | 429/5xx/超时重试 ≤2 次，尊重 `Retry-After`（上限 5 秒）；400 等不重试 | `test_finish.Retry` 3 条 |
 
-**Linux 复验（已完成）**：`79` 项契约测试全过、`CTest 34/34`、`ai-check` 通过、演练 `7/7` 必检行、
+**Linux 复验（已完成）**：`86` 项契约测试全过、`CTest 34/34`、`ai-check` 通过、演练 `7/7` 必检行、
 `verify.sh` 输出 `ALL TESTS PASSED`。复验过程中抓到并修掉三个只在 Linux 暴露的问题：
 
 1. `test_e2e_driver` 缺 `from unittest.mock import patch`（Windows 上被 `skipIf(posix)` 掩盖）；
@@ -239,6 +239,19 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 `hypothesis_status` 在这两条里**为空**——它们是孤立运行、上下文里没有待结算的验证结果，模型正确地
 省略了该字段。正例路径（支持/反驳必须引用验证运行）由 `test_finish.HypothesisUpdates` 6 条用例
 和演练的脚本化流程覆盖；真机上"两轮：提案→执行→回问"的完整数据链路**尚未用真实模型跑过**。
+
+### 审查后补齐的（全部实现并有用例）
+
+| 问题 | 处理 | 用例 |
+|---|---|---|
+| `explain` 重新导入会删掉该运行的向量索引 | 快照与已存内容一致时**跳过写入**，`--reimport` 才强制；测试断言向量仍在 | `ImportKeepsIndex` 2 条 |
+| 分块重叠 → 同一行有两个证据 id | 分块改为**行边界对齐、不重叠**（≤1800，目标 1600；单行超长才硬切），并断言一行只属于一块 | `ChunkAlignment` 3 条 |
+| 只验来源、不验"引用是否足够" | 可选 `--self-check`：追加一次调用让模型对每条引用判 yes/no/unclear，只写进 `metrics.citation_support`，**不改状态** | `SelfCheck` 1 条 |
+| 未知占位符会被原样送进沙箱 | `Templates` 在登记阶段拒绝 `${run_dir}` 以外的占位符 | `TemplatesGuard` 1 条 |
+| 一条假设只记第一条验证运行 | `hypothesis_updates` 记录 `run_ids` 列表；唯一索引 (scope,statement,status,run_id) 去重 | 由 `HypothesisUpdates` 覆盖 |
+| 假设历史按 scope 取，混入无关工作 | 改为按本次会话涉及的验证运行过滤 | 同上 |
+| `failure_reasons` 把本地超时算成 transport | 独立 `deadline` 桶 | — |
+| 缓存键含全部证据 id | 改用 `corpus_version()`（代际） | — |
 
 ## 未验证
 

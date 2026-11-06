@@ -52,12 +52,26 @@ class Store:
           CREATE TABLE IF NOT EXISTS hypothesis_status(scope TEXT, statement TEXT, status TEXT,
             run_id TEXT, analysis_id TEXT, body TEXT);
           CREATE INDEX IF NOT EXISTS hypothesis_scope ON hypothesis_status(scope);
+          CREATE UNIQUE INDEX IF NOT EXISTS hypothesis_unique ON hypothesis_status(scope,statement,status,run_id);
         ''')
 
     def close(self):
         self.db.close()
 
-    def put_bundle(self, bundle):
+    def put_bundle(self, bundle, force=False):
+        """Store a snapshot; skip it when the identical snapshot is already there.
+
+        The skip matters: replacing a bundle deletes that run's vectors, so a command that
+        merely *reads* a run (explain, analyze on an imported run) must not silently drop an
+        index the operator built. A genuinely changed snapshot still replaces everything,
+        and `force` re-imports on request.
+        """
+        if not force:
+            try:
+                if self.bundle(bundle.scope, bundle.run_id).fingerprint == bundle.fingerprint:
+                    return False
+            except AnalysisError:
+                pass
         with self.db:
             self.db.execute('DELETE FROM vectors WHERE id IN (SELECT id FROM evidence WHERE scope=? AND run=?)',
                             (bundle.scope, bundle.run_id))
@@ -67,6 +81,11 @@ class Store:
             self.db.executemany('INSERT INTO evidence VALUES(?,?,?,?)',
                                [(e.id, e.scope, e.run_id, canonical(e.json())) for e in bundle.evidence])
         self._generation += 1
+        return True
+
+    def corpus_version(self, scope):
+        """A cheap corpus identity for cache keys: it changes whenever evidence changes."""
+        return self._generation
 
     def bundle(self, scope, run_id):
         row = self.db.execute('SELECT body FROM bundles WHERE scope=? AND run=?', (scope, run_id)).fetchone()
@@ -195,17 +214,30 @@ class Store:
     # A hypothesis is only settled if the outcome is recorded somewhere other than a
     # conversation: "run X supported hypothesis H" becomes a row, and a later turn can see it.
     def save_hypothesis_updates(self, scope, analysis_id, updates):
+        """Record one row per (statement, status, runs) so repeats do not pile up."""
         with self.db:
             for update in updates:
                 body = dict(update, analysis_id=analysis_id, scope=scope)
-                self.db.execute('INSERT INTO hypothesis_status VALUES(?,?,?,?,?,?)',
+                self.db.execute('INSERT OR REPLACE INTO hypothesis_status VALUES(?,?,?,?,?,?)',
                                 (scope, str(update['statement'])[:500], str(update['status']),
-                                 str(update.get('run_id') or ''), analysis_id, canonical(body)))
+                                 ','.join(sorted(set(update.get('run_ids') or [])
+                                                | ({update['run_id']} if update.get('run_id') else set()))),
+                                 analysis_id, canonical(body)))
 
-    def hypothesis_history(self, scope, limit=8):
+    def hypothesis_history(self, scope, run_ids=None, limit=8):
+        """Recent settlements, optionally only those about a given set of runs.
+
+        `run_ids` is how a conversation sees its own history instead of the whole project's:
+        a scope can hold hypotheses from unrelated work.
+        """
         rows = self.db.execute('SELECT body FROM hypothesis_status WHERE scope=? '
-                               'ORDER BY rowid DESC LIMIT ?', (scope, limit)).fetchall()
-        return [json.loads(row[0]) for row in reversed(rows)]
+                               'ORDER BY rowid DESC LIMIT 200', (scope,)).fetchall()
+        items = [json.loads(row[0]) for row in rows]
+        if run_ids is not None:
+            wanted = set(run_ids)
+            items = [item for item in items
+                     if wanted & set(filter(None, str(item.get('run_id') or '').split(',')))]
+        return list(reversed(items))[:limit]
 
     # A verification run is what turns a proposal into a fact: it has to be reachable from
     # the conversation that proposed it, otherwise the next analyze can only guess that the

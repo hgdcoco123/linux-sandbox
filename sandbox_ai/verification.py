@@ -11,6 +11,22 @@ from .models import AnalysisError, digest
 
 
 RUNDIR = '${run_dir}'
+_PLACEHOLDER = re.compile(r'\$\{[^}]*\}')
+
+
+def _reject_unknown_placeholders(value):
+    """Only ${run_dir} is substituted; anything else would reach the sandbox verbatim."""
+    if isinstance(value, str):
+        for name in _PLACEHOLDER.findall(value):
+            if name != RUNDIR:
+                raise AnalysisError('Unknown template placeholder ' + name +
+                                    ' (only ${run_dir} is supported)')
+    elif isinstance(value, list):
+        for item in value:
+            _reject_unknown_placeholders(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _reject_unknown_placeholders(item)
 
 
 def _resolve_template_path(value, base):
@@ -39,6 +55,7 @@ class Templates:
             config = json.loads(read_file(config_path.parent, config_path.name, MAX_REPORT, full=True)[0][0][1])
             # A template the sandbox itself will reject is not a trusted template: catch it
             # when the registry is read, not after the operator has already executed it.
+            _reject_unknown_placeholders(config)
             if config.get('schema_version') != 1:
                 raise AnalysisError('Verification templates must declare schema_version 1')
             if config.get('mode') != 'isolated' or config.get('network') != 'none' or config.get('session', {}).get('enabled'):

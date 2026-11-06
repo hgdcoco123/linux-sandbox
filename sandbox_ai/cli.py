@@ -44,6 +44,9 @@ def parser():
     p.add_argument('--embedding-model', default=os.environ.get('SANDBOX_AI_EMBEDDING_MODEL', ''))
     p.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
     p.add_argument('--quiet', action='store_true', help='No progress heartbeat on stderr')
+    p.add_argument('--reimport', action='store_true', help='Re-import even if the snapshot is unchanged')
+    p.add_argument('--self-check', action='store_true',
+                   help='Ask the model whether each cite actually supports its claim (recorded only)')
     p.add_argument('--allow-local-http', action='store_true')
     p.add_argument('--semantic', action='store_true', help='Use real embedding vectors with lexical retrieval')
     p.add_argument('--rerank', action='store_true',
@@ -84,7 +87,8 @@ def parser():
 def _failure_kind(error):
     """Bucket a failure by cause, so the aggregate says where the limit is."""
     text = (error or '').lower()
-    for name, needles in (('transport', ('http', 'transport', 'timed out', 'deadline')),
+    for name, needles in (('deadline', ('deadline',)),
+                          ('transport', ('http', 'transport', 'timed out')),
                           ('citation', ('citation', 'line')),
                           ('schema', ('analysis fields', 'analysis list', 'invalid claim',
                                       'invalid next step', 'json')),
@@ -172,9 +176,11 @@ def explain(store, args, model):
     answer with the resolved evidence line behind every claim.
     """
     bundle = collect(args.scope, args.run_dir, context=args.context)
-    store.put_bundle(bundle)
+    # Reading a run must not drop an index the operator built: skip an unchanged snapshot.
+    store.put_bundle(bundle, force=getattr(args, 'reimport', False))
     engine = Analyzer(store, model, semantic=args.semantic,
-                      reranker=model if args.rerank else None)
+                      reranker=model if args.rerank else None,
+                      self_check=getattr(args, 'self_check', False))
     result = engine.analyze(args.scope, bundle.run_id, args.question)
     if getattr(args, 'as_json', False):
         print(json.dumps(dict(run_id=bundle.run_id, status=result['status'],
@@ -223,7 +229,7 @@ def main(argv=None):
         store = Store(args.db)
         if args.command == 'import':
             bundle = collect(args.scope, args.run_dir, args.artifacts, args.sources, args.context)
-            store.put_bundle(bundle)
+            store.put_bundle(bundle, force=getattr(args, 'reimport', False))
             result = dict(run_id=bundle.run_id, evidence_count=len(bundle.evidence), warnings=bundle.warnings)
         elif args.command == 'index':
             count = store.embed(args.scope, provider(args)) if args.semantic else len(store.corpus(args.scope))
@@ -233,6 +239,7 @@ def main(argv=None):
         elif args.command == 'analyze':
             engine = Analyzer(store, provider(args), semantic=args.semantic,
                               reranker=provider(args) if args.rerank else None,
+                              self_check=args.self_check,
                               templates=Templates(args.templates) if args.templates else None)
             result = engine.analyze(args.scope, args.run_id, args.question, args.session, args.refresh)
         elif args.command == 'explain':

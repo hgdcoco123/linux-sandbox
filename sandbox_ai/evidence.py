@@ -158,7 +158,46 @@ def quote_line(text, limit=160):
     return text.strip()[:limit]
 
 
-_MODEL_LINE_PREFIX = re.compile(r'^L\d+\|\s?')
+_MODEL_LINE_PREFIX = re.compile(r'^L(\d+)\|\s?')
+
+CHUNK_TARGET = 1600
+CHUNK_MAX = 1800
+
+
+def prefix_lines(text):
+    """Number every line the way the model sees it, so citing is copying a label."""
+    return ['L' + str(number) + '| ' + line
+            for number, line in enumerate(text.splitlines() or [''], 1)]
+
+
+def strip_line_prefix(line):
+    """The content of a line the model was shown, without its `L12| ` label."""
+    return _MODEL_LINE_PREFIX.sub('', line) if isinstance(line, str) else ''
+
+
+def spans(text):
+    """Line-aligned, non-overlapping spans of at most CHUNK_MAX characters.
+
+    Overlapping windows (1600 stride, 1800 window) meant one physical line could belong to
+    two chunks, and therefore have two evidence ids - a "line address" that was not unique.
+    Spans now end on a line boundary, so every line belongs to exactly one chunk; a single
+    line longer than CHUNK_MAX is hard-split, which the location range makes visible.
+    """
+    start, size = 0, len(text)
+    while start < size:
+        end = start
+        while end < size:
+            newline = text.find('\n', end)
+            line_end = size if newline < 0 else newline + 1
+            if line_end - start > CHUNK_MAX:
+                break
+            end = line_end
+            if end - start >= CHUNK_TARGET:
+                break
+        if end == start:                       # one line longer than the maximum
+            end = min(start + CHUNK_MAX, size)
+        yield start, end
+        start = end
 
 
 def line_reference(item, minimum=8):
@@ -168,20 +207,16 @@ def line_reference(item, minimum=8):
         lines = item['text'].splitlines() or ['']
     for index, line in enumerate(lines, 1):
         # Prompt items carry a visible "L12| " label; it does not count as content.
-        text = _MODEL_LINE_PREFIX.sub('', line) if isinstance(line, str) else ''
-        if len(text.strip()) >= minimum:
+        if len(strip_line_prefix(line).strip()) >= minimum:
             return dict(id=item['id'], line=index)
     return dict(id=item['id'], line=1)
 
 
 def chunks(scope, run_id, kind, source, text, location='text', truncated=False):
     text = redact(text)
-    for start in range(0, len(text), 1600):
-        end = min(start + 1800, len(text))
+    for start, end in spans(text):
         yield evidence(scope, run_id, kind, source, f'{location}; chars {start}:{end}',
                        text[start:end], truncated)
-        if end == len(text):
-            break
 
 
 def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):

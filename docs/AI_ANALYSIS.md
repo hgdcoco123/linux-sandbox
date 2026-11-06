@@ -59,9 +59,10 @@ python3 -m sandbox_ai --db /tmp/analysis.sqlite3 --scope build-demo import \
 ```
 
 sources和artifacts都是可选的，由操作者显式指定。不要指定包含密钥或无关文件的整个主目录。
-同scope/run_id重新导入会替换证据，并让旧的向量失效。上下文是业务要求，不是已确认事实。
+同 scope/run_id 重新导入时，若快照与已存内容**完全一致会跳过**（否则会把该运行已建好的向量删掉）；内容确实变了才替换证据并让旧向量失效。要强制重导用 `--reimport`。上下文是业务要求，不是已确认事实。
 导入会返回run_id；持续会话命令ID由会话目录和命令index共同组成，后续使用返回值。
 
+分块按**行边界**切：每块 ≤1800 字符、目标 1600，**不重叠**（重叠会让同一行出现在两个块里、有两个证据 id）；单行超过 1800 时才硬切。
 证据提取每文件最多64KiB，超限日志保留头尾；每个源码/产物根最多32个文件、128个目录，
 总共最多256块。超限、缺失和不支持的格式会记录warnings。CSV只做结构统计，
 不会凭空判定业务正确性。JSON可能经过脱敏和格式化，引用指向规范化证据片段。
@@ -130,7 +131,8 @@ embedding模型变更或重新导入后重新index。向量失败时分析会明
 
 usage记录服务商实际返回的用量，未返回时不估造token数。
 
-证据给模型时每行带 `L12| ` 前缀，行号是可见标签、不需要数；引用只回行号。`stats` 另给出 `failure_reasons`（transport / citation / schema / budget）分布。检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
+证据给模型时每行带 `L12| ` 前缀，行号是可见标签、不需要数；引用只回行号。`stats` 另给出 `failure_reasons`（deadline / transport / citation / schema / budget）分布。
+可选 `--self-check` 会在分析完成后追问模型一次："每条引用是否真的支持该主张"，结果只记进 `metrics.citation_support`（supported / unsupported / unclear），**不改变**校验结果或状态——它用来区分"引用真实"和"引用足够"。检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
 （`SANDBOX_AI_RERANK_MODEL`）再调 `/rerank` 精排；精排失败**降级保留融合顺序**并写进 `warnings`，
 `metrics.reranked` 为 false，`metrics.retrieval` 标记为不含 `+rerank`。
 

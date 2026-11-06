@@ -4,7 +4,7 @@ import re
 import time
 import uuid
 
-from .evidence import MAX_READ, STREAMS, read_span
+from .evidence import MAX_READ, STREAMS, prefix_lines, read_span, strip_line_prefix
 from .models import AnalysisError, canonical, digest, evidence
 
 PROMPT_VERSION = 'evidence-analysis-v7'
@@ -87,10 +87,7 @@ def _public(item):
     raw = item['text'].splitlines() or ['']
     return dict(id=item['id'], kind=item['kind'], source=item['source'],
                 location=item['location'], origin=item.get('origin', 'current'),
-                lines=['L' + str(number) + '| ' + line for number, line in enumerate(raw, 1)])
-
-
-_LINE_PREFIX = re.compile(r'^L\d+\|\s?')
+                lines=prefix_lines(item['text']))
 
 
 def _resolve_citation(ref, seen, resolved=None):
@@ -116,7 +113,7 @@ def _resolve_citation(ref, seen, resolved=None):
             raise AnalysisError('Invalid citation: quote must be a string')
         # Optional cross-check only: it cannot introduce text, it can only disagree. A model
         # that copies the visible "L12| " prefix is not wrong about the content.
-        quote = _LINE_PREFIX.sub('', quote.strip())
+        quote = strip_line_prefix(quote.strip())
         if quote not in text and _compact(quote) not in _compact(text):
             raise AnalysisError('The optional quote does not match the cited line ' + str(line))
     if resolved is not None:
@@ -191,13 +188,52 @@ def validate_analysis(value, seen, resolved=None):
 
 class Analyzer:
     def __init__(self, store, provider, semantic=False, templates=None, max_calls=6,
-                 max_tools=4, max_context_chars=48000, deadline_seconds=180, reranker=None):
+                 max_tools=4, max_context_chars=48000, deadline_seconds=180, reranker=None,
+                 self_check=False):
         if not 1 <= max_calls <= 10 or not 0 <= max_tools <= 8:
             raise AnalysisError('Invalid model/tool call budget')
         self.store, self.provider = store, provider
         self.semantic, self.templates, self.reranker = semantic, templates, reranker
         self.max_calls, self.max_tools = max_calls, max_tools
         self.max_chars, self.deadline = max_context_chars, deadline_seconds
+        self.self_check = self_check
+
+    def judge(self, analysis, seen):
+        """Ask the model whether each cited line, alone, supports its claim.
+
+        Recorded only. A second opinion is not evidence, so it never changes the verdict or
+        the citations; it exists so "the quote is real" and "the quote backs the claim" can
+        be told apart in the metrics instead of being conflated.
+        """
+        pairs = []
+        for key in ('facts', 'hypotheses'):
+            for claim in analysis.get(key) or []:
+                for ref in claim.get('citations') or []:
+                    item = seen.get(ref['id']) or {}
+                    lines = str(item.get('text') or '').splitlines() or ['']
+                    line = ref.get('line', 1)
+                    if type(line) is int and 1 <= line <= len(lines):
+                        pairs.append(dict(claim=str(claim.get('statement') or '')[:400],
+                                          line=lines[line - 1].strip()[:400]))
+        if not pairs:
+            return {'checked': 0}
+        prompt = ('For each numbered pair, decide whether the evidence line on its own supports '
+                  'the claim. Reply with JSON only: {"verdicts": ["yes"|"no"|"unclear", ...]}, '
+                  'exactly one entry per pair, in order.\n\n' +
+                  '\n'.join(str(index) + '. claim: ' + pair['claim'] + '\n   line: ' + pair['line']
+                            for index, pair in enumerate(pairs, 1)))
+        try:
+            message = self.provider.complete(
+                [dict(role='system', content='You judge whether a quote supports a claim.'),
+                 dict(role='user', content=prompt)], [])
+            verdicts = json.loads(message.get('content') or '{}').get('verdicts')
+            if (not isinstance(verdicts, list) or len(verdicts) != len(pairs)
+                    or any(verdict not in ('yes', 'no', 'unclear') for verdict in verdicts)):
+                raise AnalysisError('self-check returned an invalid verdict list')
+            return {'checked': len(pairs), 'supported': verdicts.count('yes'),
+                    'unsupported': verdicts.count('no'), 'unclear': verdicts.count('unclear')}
+        except (AnalysisError, TypeError, ValueError) as error:
+            return {'checked': len(pairs), 'error': str(error)[:200]}
 
     def analyze(self, scope, run_id, question, session_id=None, refresh=False):
         if not isinstance(question, str) or not question.strip() or len(question) > 4000:
@@ -220,7 +256,7 @@ class Analyzer:
         # Corpus version prevents stale RAG answers after import/deletion/replacement.
         key = digest([PROMPT_VERSION, bundle.fingerprint, question, history, self.provider.identity,
                       self.semantic, getattr(self.provider, 'embedding_identity', ''),
-                      [e.id for e in self.store.corpus(scope)],
+                      self.store.corpus_version(scope),
                       [r['run_id'] for r in receipts],
                       self.templates.catalog() if self.templates else [], self.max_calls, self.max_tools])
         if not refresh:
@@ -271,7 +307,7 @@ class Analyzer:
                        available_evidence=[dict(id=e.id, kind=e.kind, source=e.source, location=e.location)
                                            for e in bundle.evidence if e.id not in seen][:40],
                        verification_templates=self.templates.catalog() if self.templates else [],
-                       known_hypotheses=self.store.hypothesis_history(scope),
+                       known_hypotheses=self.store.hypothesis_history(scope, [r["run_id"] for r in receipts]),
                        verification_context=[dict(proposal_id=r['proposal_id'],
                                                   analysis_id=r['analysis_id'],
                                                   run_id=r['run_id'],
@@ -331,9 +367,14 @@ class Analyzer:
                     result['resolved_citations'] = resolved
                     settled = result['analysis'].get('hypothesis_updates') or []
                     for update in settled:
-                        update['run_id'] = next((seen[ref['id']].get('run_id')
-                                               for ref in update['citations']
-                                               if ref['id'] in seen), '')
+                        cited = [seen[ref['id']] for ref in update['citations']
+                                 if ref['id'] in seen]
+                        # Every verification run behind this verdict, not just the first:
+                        # a hypothesis settled by two runs should say so.
+                        update['run_ids'] = sorted({item.get('run_id') for item in cited
+                                                  if item.get('origin') == 'verification'
+                                                  and item.get('run_id')})
+                        update['run_id'] = (update['run_ids'] or [''])[0]
                     if settled:
                         self.store.save_hypothesis_updates(scope, result['analysis_id'], settled)
                 except (TypeError, ValueError, AnalysisError) as error:
@@ -384,6 +425,8 @@ class Analyzer:
             elapsed_seconds=result['elapsed_seconds'],
             cache_hit=False)
         settled = (result['analysis'] or {}).get('hypothesis_updates') or []
+        if self.self_check:
+            result['metrics']['citation_support'] = self.judge(result['analysis'] or {}, seen)
         result['metrics']['hypothesis_updates'] = {
             status: sum(1 for update in settled if update['status'] == status)
             for status in ('supported', 'refuted', 'unknown')}

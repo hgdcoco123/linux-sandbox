@@ -12,9 +12,10 @@ from urllib.error import HTTPError
 
 from sandbox_ai.models import AnalysisError
 from sandbox_ai.providers import CompatibleProvider
-from sandbox_ai.service import validate_analysis
+from sandbox_ai.service import Analyzer, validate_analysis
 from sandbox_ai.store import Store
-from sandbox_ai.verification import substitute
+from sandbox_ai.evidence import chunks, spans, prefix_lines, strip_line_prefix
+from sandbox_ai.verification import Templates, substitute
 
 
 def analysis(updates):
@@ -139,6 +140,116 @@ class Retry(unittest.TestCase):
             with self.assertRaisesRegex(AnalysisError, 'HTTP 503'):
                 client.complete([], [])
         self.assertEqual(len(attempts), 2)
+
+
+class ChunkAlignment(unittest.TestCase):
+    def test_no_line_belongs_to_two_chunks(self):
+        text = '\n'.join('line %03d payload' % index for index in range(400))
+        pieces = list(spans(text))
+        self.assertEqual(''.join(text[start:end] for start, end in pieces), text)
+        self.assertTrue(all(end - start <= 1800 for start, end in pieces))
+        seen = {}
+        for start, end in pieces:
+            for line in text[start:end].splitlines():
+                seen[line] = seen.get(line, 0) + 1
+        self.assertEqual(max(seen.values()), 1, 'a line appears in two chunks')
+
+    def test_a_single_long_line_is_split_rather_than_dropped(self):
+        text = 'x' * 5000
+        pieces = list(spans(text))
+        self.assertEqual(''.join(text[start:end] for start, end in pieces), text)
+        self.assertTrue(all(end - start <= 1800 for start, end in pieces))
+
+    def test_line_labels_round_trip(self):
+        lines = prefix_lines('alpha\nbeta')
+        self.assertEqual(lines, ['L1| alpha', 'L2| beta'])
+        self.assertEqual(strip_line_prefix(lines[1]), 'beta')
+
+
+class ImportKeepsIndex(unittest.TestCase):
+    def bundle(self, root, marker):
+        from sandbox_ai.evidence import collect
+        run = root/'run'
+        run.mkdir(exist_ok=True)
+        (run/'result.json').write_text(json.dumps(dict(run_id='run-x', summary=marker, errors=[])))
+        (run/'stdout.bin').write_bytes(b'')
+        (run/'stderr.bin').write_bytes((marker + '\n').encode())
+        return collect('p', run)
+
+    def test_unchanged_snapshot_does_not_drop_vectors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = Store(root/'s.db')
+            try:
+                bundle = self.bundle(root, 'first')
+                self.assertTrue(store.put_bundle(bundle))
+                with store.db:
+                    store.db.execute('INSERT INTO vectors VALUES(?,?,?)',
+                                     (bundle.evidence[0].id, 'embedding:x', '[1]'))
+                self.assertFalse(store.put_bundle(bundle), 'an identical snapshot must be skipped')
+                kept = store.db.execute('SELECT COUNT(*) FROM vectors').fetchone()[0]
+                self.assertEqual(kept, 1, 'a read-only re-import dropped the vector index')
+                (root/'run'/'stderr.bin').write_bytes(b'changed\n')
+                self.assertTrue(store.put_bundle(self.bundle(root, 'changed')))
+                gone = store.db.execute('SELECT COUNT(*) FROM vectors').fetchone()[0]
+                self.assertEqual(gone, 0, 'a changed snapshot must invalidate vectors')
+            finally:
+                store.close()
+
+    def test_corpus_version_moves_when_evidence_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = Store(root/'s.db')
+            try:
+                before = store.corpus_version('p')
+                store.put_bundle(self.bundle(root, 'first'))
+                self.assertNotEqual(store.corpus_version('p'), before)
+            finally:
+                store.close()
+
+
+class SelfCheck(unittest.TestCase):
+    def analysis(self):
+        return dict(summary='s',
+                    facts=[dict(statement='the target exited 43',
+                                citations=[dict(id='ev-1', line=1)])],
+                    hypotheses=[], missing_info=[], next_steps=[])
+
+    def provider(self, verdicts):
+        import copy
+        class Provider:
+            identity = 'self-check'
+            usage = []
+            def complete(self, messages, tools):
+                return dict(role='assistant', content=json.dumps(dict(verdicts=verdicts)))
+        return Provider()
+
+    def test_verdicts_are_recorded_not_enforced(self):
+        import copy
+        seen = {'ev-1': dict(id='ev-1', text='exit_code: 43\n', origin='current')}
+        model = self.provider(['no'])
+        analyzer = Analyzer(store=None, provider=model, self_check=True)
+        result = analyzer.judge(self.analysis(), seen)
+        self.assertEqual(result, {'checked': 1, 'supported': 0, 'unsupported': 1, 'unclear': 0})
+        model_bad = self.provider(['maybe'])
+        bad = Analyzer(store=None, provider=model_bad, self_check=True).judge(self.analysis(), seen)
+        self.assertIn('error', bad)
+        self.assertEqual(bad['checked'], 1)
+
+
+class TemplatesGuard(unittest.TestCase):
+    def test_unknown_placeholder_is_refused_at_registration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root/'cfg.json').write_text(json.dumps(dict(
+                schema_version=1, mode='isolated', network='none',
+                argv=['/bin/echo', '${artifact}'],
+                limits=dict(wall_ms=1000, startup_ms=1000, grace_ms=100,
+                            memory_bytes=1024, pids=4, capture_bytes=1024, tmp_bytes=1024))))
+            (root/'templates.json').write_text(json.dumps(
+                {'probe': {'description': 'd', 'config': 'cfg.json'}}))
+            with self.assertRaisesRegex(AnalysisError, 'Unknown template placeholder'):
+                Templates(root/'templates.json')
 
 
 if __name__ == '__main__':
