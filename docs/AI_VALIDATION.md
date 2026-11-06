@@ -76,8 +76,25 @@ kernel.apparmor_restrict_unprivileged_userns=1`。
 `executed_not_automatically_confirmed`——这说明状态不取决于目标成功与否，但那次不能当作
 "验证通过"的记录，所以只保留为过程事实。
 
+### 验证边界（真机，已执行）
+
+同一次演练里跑了三个边界模板，全部真实隔离执行（`/tmp/sbx-ai-verify.JQAiBa`，7 条必检行全绿、
+`verifications=3`）：
+
+| 模板 | 沙箱报告 | 回执 |
+|---|---|---|
+| 可写检查（`session-write`） | `summary=success`、`verdict=ok`、`exit 0` | `executed_not_automatically_confirmed` |
+| 目标自身失败（`session-read`） | `summary=nonzero_exit`、`verdict=target_failed`、`exit 43` | 同上，**没有被说成假设已证实** |
+| 目标忽略 SIGTERM（`ignore-term`，wall 200ms/grace 200ms） | `summary=timeout`、`verdict=target_failed`、`exit/signal` 均为 null | 同上 |
+| 模板在提案后被改动 | 未执行 | 抛错拒绝，**输出目录都没有创建** |
+
+三条回执的 `isolated` 都是 `true`、`cleanup.errors` 为空。这三条边界此前只有契约测试（假 launch
+plan、假子进程），现在有真机证据；演练脚本自身的分支逻辑另有假沙箱契约测试覆盖
+（`tests/unit/ai/test_e2e_driver.py`），所以驱动脚本的 bug 不再需要一次特权运行才能发现。
+
 这次真机执行还暴露了 4 个 harness 侧的缺陷（状态目录 0755、可选参数被当函数调用、模板缺
-`schema_version`、模板缺 `/output` 挂载），都已修在提交里；沙箱和 AI 逻辑本身没有发现问题。
+`schema_version`、模板缺 `/output` 挂载），以及单行引用规则上线后驱动脚本自己仍用跨行引用的问题，
+都已修在提交里；沙箱和 AI 逻辑本身没有发现问题。
 
 ## 真实模型（已执行，结论是"模型侧不达标"）
 
@@ -161,7 +178,8 @@ M3 的失败模式（拼接不同位置的真实行）无法靠调提示词解�
 
 - **诊断质量的普适性**：`qwen-plus` 三轮 1/4、1/4、0/4（引用拼接）；`qwen3.8-max` 3/4、结论 3/3 正确。
   这是 4 个样本、单一模型、单机的结果，不是基准；换模型/换证据形态都应重测。
-- 验证模板的其它边界（超时、模板变更拒绝、目标失败）只在契约测试里验证过；真机只跑过成功的一次。
+- 验证模板的边界（超时、模板变更拒绝、目标失败）已在真机演练中执行，见上文"验证边界"；其余组合
+  仍只由契约测试覆盖。
 - 真实模型面对提示注入、错误线索和复杂任务时的推断可靠性；离线测试不能证明抗注入能力。
 - Linux 符号链接检查已在本机执行；对**并发**恶意替换目录的抵抗能力仍未验证。
 - 引用校验只证明"这段话确实来自这份证据"，不证明推断正确；`stats` 的合格率衡量格式与引用，
