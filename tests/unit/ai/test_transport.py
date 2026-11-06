@@ -59,7 +59,38 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(AnalysisError):
                     client.complete([], [])
 
-    def test_answer_budget_is_a_bounded_parameter(self):
+    def test_rerank_request_and_ordering(self):
+        with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
+            client = CompatibleProvider('https://example.test/v1', 'chat-test', key_env='TEST_AI_KEY',
+                                        rerank_model='rerank-test')
+        self.assertTrue(client.rerank_identity.startswith('rerank:'))
+        body = json.dumps({'results': [{'index': 0, 'relevance_score': 0.1},
+                                       {'index': 1, 'relevance_score': 0.9}]}).encode()
+        with patch('sandbox_ai.providers.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(body)
+            ranked = client.rerank('why?', ['first', 'second'])
+            request = json.loads(factory.return_value.open.call_args.args[0].data)
+        self.assertEqual([index for index, _ in ranked], [1, 0])
+        self.assertEqual(request['model'], 'rerank-test')
+        self.assertEqual(request['documents'], ['first', 'second'])
+        self.assertEqual(request['top_n'], 2)
+
+    def test_rerank_refuses_a_partial_or_malformed_ranking(self):
+        with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
+            client = CompatibleProvider('https://example.test/v1', 'chat-test', key_env='TEST_AI_KEY',
+                                        rerank_model='rerank-test')
+        for body in (b'{"results":[{"index":0,"relevance_score":0.5}]}',
+                     b'{"results":[{"index":5,"relevance_score":0.5},{"index":0,"relevance_score":0.1}]}',
+                     b'{"results":[{"index":0,"relevance_score":"high"},{"index":1,"relevance_score":0.1}]}',
+                     b'{"results":[{"index":0,"relevance_score":0.5},{"index":0,"relevance_score":0.1}]}'):
+            with self.subTest(body=body), patch('sandbox_ai.providers.build_opener') as factory:
+                factory.return_value.open.return_value = io.BytesIO(body)
+                with self.assertRaises(AnalysisError):
+                    client.rerank('why?', ['first', 'second'])
+        with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
+            without = CompatibleProvider('https://example.test/v1', 'chat-test', key_env='TEST_AI_KEY')
+        with self.assertRaisesRegex(AnalysisError, 'rerank model'):
+            without.rerank('why?', ['x'])
         # A thinking model can take minutes and a many-citation answer needs room; both are
         # client decisions, so they are bounded parameters rather than silent constants.
         client = self.provider()

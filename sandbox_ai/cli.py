@@ -16,11 +16,13 @@ from .verification import Templates, execute
 
 def provider(args):
     if args.provider == 'demo':
-        if args.semantic:
-            raise AnalysisError('Demo does not simulate semantic embeddings; use a real embedding provider')
+        if args.semantic or getattr(args, 'rerank', False):
+            raise AnalysisError('Demo does not simulate embeddings or a reranker; use a real provider')
         return DemoProvider()
     return CompatibleProvider(args.base_url, args.model, args.embedding_model,
-                              key_env=args.key_env, allow_local_http=args.allow_local_http)
+                              key_env=args.key_env, allow_local_http=args.allow_local_http,
+                              rerank_model=os.environ.get('SANDBOX_AI_RERANK_MODEL', '')
+                              if getattr(args, 'rerank', False) else '')
 
 
 def parser():
@@ -34,6 +36,8 @@ def parser():
     p.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
     p.add_argument('--allow-local-http', action='store_true')
     p.add_argument('--semantic', action='store_true', help='Use real embedding vectors with lexical retrieval')
+    p.add_argument('--rerank', action='store_true',
+                   help='Second stage: rerank the fused candidates with SANDBOX_AI_RERANK_MODEL')
     sub = p.add_subparsers(dest='command', required=True)
     imp = sub.add_parser('import', help='Snapshot a completed one-shot run or persistent command directory')
     imp.add_argument('--run-dir', type=Path, required=True)
@@ -58,6 +62,10 @@ def parser():
     demo = sub.add_parser('demo', help='Synthetic fixtures and deterministic model; no Linux or API calls')
     demo.add_argument('--output', type=Path, required=True, help='New directory')
     sub.add_parser('stats', help='Aggregate the recorded analyses of this scope')
+    exp = sub.add_parser('explain', help='One question about one run: what happened, what is known')
+    exp.add_argument('--run-dir', type=Path, required=True, help='Completed run directory')
+    exp.add_argument('--question', default='这次运行为什么失败？请区分已确认事实、原因假设和仍缺少的信息。')
+    exp.add_argument('--context', default='')
     return p
 
 
@@ -121,6 +129,50 @@ def demo(store, scope, output):
                 search=store.search(scope, 'undefined reference'), output=str(output.resolve()))
 
 
+def explain(store, args, model):
+    """One command, one call, no conversation: what happened, what is known, what is not.
+
+    This is the shape the layer is meant to have for a user who just ran something and does
+    not want to open a chat: it imports the run if needed, asks one question, and prints the
+    answer with the resolved evidence line behind every claim.
+    """
+    bundle = collect(args.scope, args.run_dir, context=args.context)
+    store.put_bundle(bundle)
+    engine = Analyzer(store, model, semantic=args.semantic,
+                      reranker=model if args.rerank else None)
+    result = engine.analyze(args.scope, bundle.run_id, args.question)
+    execution = result['execution'] or {}
+    print('run: ' + bundle.run_id)
+    print('execution: ' + str(execution.get('summary')) + ', verdict ' +
+          str(execution.get('verdict')) + ', exit ' + str(execution.get('exit_code')))
+    print('status: ' + result['status'] + ('  (' + str(result.get('error')) + ')'
+                                           if result.get('error') else ''))
+    analysis = result.get('analysis') or {}
+    if analysis:
+        print('\n' + str(analysis.get('summary')))
+        resolved = {(item['id'], item['line']): item['text']
+                    for item in result.get('resolved_citations') or []}
+        for label, key in (('已确认', 'facts'), ('假设', 'hypotheses')):
+            for claim in analysis.get(key) or []:
+                print('\n[' + label + '] ' + str(claim.get('statement')))
+                for ref in claim.get('citations') or []:
+                    text = resolved.get((ref.get('id'), ref.get('line')), '')
+                    print('    ' + str(ref.get('id')) + ' L' + str(ref.get('line')) + ': ' + text)
+        for item in analysis.get('missing_info') or []:
+            print('\n[未知] ' + str(item))
+        for step in analysis.get('next_steps') or []:
+            print('\n[建议] ' + str(step.get('action')) + '  → 期望: ' +
+                  str(step.get('expected_observation')))
+    for warning in result.get('warnings') or []:
+        print('\n[warn] ' + str(warning))
+    metrics = result.get('metrics') or {}
+    print('\nretrieval: ' + str(metrics.get('retrieval')) + ' · citations ' +
+          str(metrics.get('citations')) + ' · tools ' + str(metrics.get('tool_calls')) +
+          ' · repairs ' + str(metrics.get('repairs')) + ' · ' +
+          str(result.get('elapsed_seconds')) + 's')
+    return 2 if result['status'] != 'completed' else 0
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     store = None
@@ -137,8 +189,11 @@ def main(argv=None):
             result = store.search(args.scope, args.query, provider=provider(args) if args.semantic else None)
         elif args.command == 'analyze':
             engine = Analyzer(store, provider(args), semantic=args.semantic,
+                              reranker=provider(args) if args.rerank else None,
                               templates=Templates(args.templates) if args.templates else None)
             result = engine.analyze(args.scope, args.run_id, args.question, args.session, args.refresh)
+        elif args.command == 'explain':
+            return explain(store, args, provider(args))
         elif args.command == 'verify':
             result = execute(store, args.scope, args.analysis_id, args.proposal_id,
                              Templates(args.templates), args.binary, args.results)

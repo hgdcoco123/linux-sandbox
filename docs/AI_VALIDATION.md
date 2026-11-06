@@ -9,7 +9,7 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-结果：**61 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 15 / `test_transport.py` 6 /
+结果：**66 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
 `test_verification.py` 7 / `test_e2e_driver.py` 4）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
 
 同一套测试已注册进 CTest：
@@ -21,7 +21,7 @@ ctest --test-dir build
 `ai_contracts` 作为第 34 个测试运行并通过（`100% tests passed, 0 tests failed out of 34`；
 `isolation_integration` 在无 systemd 委派时跳过）。
 
-`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 61 项契约测试、跑离线 demo 并断言
+`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 66 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
 
@@ -152,24 +152,37 @@ EVID  : "[18:22:47] … state=preparing\n[18:22:47] … run directory: …\n…"
   `session.enabled=false` 的关系列为假设，并明确说缺少 fixture 源码无法证实。
 
 也就是说：**链路、引用校验、工具预算在有能力的模型上是可用的；换模型是有效的，但代价是慢和贵。**
-要便宜地达到同样效果，仍推荐"按行可寻址证据"那条路（未实现）。
 
-### 引用规则收紧为"必须落在某一行内"（已实施）
+### 引用契约的三次演进（每次都测，数字都在）
 
-M3 的失败模式（拼接不同位置的真实行）无法靠调提示词解决，所以把规则改掉：引用必须落在被引证据的
-**某一行内**，只有空白可以不同、允许多一层转义；跨行拼接、改写、重排、缩写一律拒绝。
+| 契约 | 模型输出 | `qwen-plus` | `qwen3.8-max` | 失败模式 |
+|---|---|---|---|---|
+| M1 文本引用 | `{id, quote}` | 1/4 | 未测 | 重排紧凑 JSON 后引用 |
+| M2/M3 单行引用 | `{id, quote}`，必须落在某一行内 | 0/4 | **3/4** | 跨行拼接（模型一直在拼） |
+| **M4 行地址** | `{id, line}`，**原文由程序解析** | **2/4** | 未复测 | **指到了真实但太短的行** |
 
-| 模型 | 旧规则 | 新规则（单行） |
-|---|---|---|
-| `qwen-plus` | 1/4、1/4、0/4 | **0/4**（4 条都因"跨行"被拒，约 4.3 万 token） |
-| `qwen3.8-max` | **3/4**（140 条引用通过） | **未复测**（成本原因） |
+M4 是这次的关键改动：模型不再输出引用文本，只给行号；`result["resolved_citations"]` 里是程序按行
+取出的原文。效果是可测的：
 
-必须说明白：**这条规则更严，不会提高通过率**。它买到的是性质变化——拼接不再"被检出"，而是
-"构造上无法表达"；一条通过的引用就是一行可复现的原文。`qwen-plus` 在新规则下 0/4 恰恰说明它
-一直在跨行拼接；`qwen3.8-max` 旧规则的 3/4 不能当作新规则下的成绩。
+- `qwen-plus` 从 **0/4 升到 2/4**（15 条引用全部成功解析，2.7 万 token，16–40 秒/条）——同一个模型、
+  同一批用例，只换了契约。
+- 剩下两条失败的原因是 **"the cited line is shorter than 8 characters"**：模型指向了真实存在但过短的
+  行（例如一个 `}`），这是**选错证据**，不是编造证据。
+- 也就是说：**伪造在构造上消失了，残留的是选择能力**——这类错误可以用更强的模型或更好的提示改善，
+  而且它不再具有"看起来像证据"的欺骗性。
 
-同样，`tools/ai-check.sh` 的 demo、全部契约测试和 `verify.sh` 都跟着这条规则更新：脚本化 provider
-现在必须引用整行（`evidence.quote_line`），否则连 demo 都过不了。
+`qwen3.8-max` 在 M4 下**未复测**（成本原因）；M3 的 3/4 不能当作 M4 的成绩。M4 的契约测试、demo
+（`line_reference`）、`explain` 命令与 `verify.sh` 都已跟进。
+
+顺便：`explain` 现在可以直接跑一条失败运行：
+
+```bash
+python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run-xxxx
+# run: run-98999939c0…
+# execution: nonzero_exit, verdict target_failed, exit 43
+# [已确认] …
+#     ev-4a18ce4e… L2: "cleanup": {
+```
 
 
 

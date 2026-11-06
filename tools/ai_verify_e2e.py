@@ -25,7 +25,7 @@ import tempfile
 # is not on sys.path, and the sandbox may be imported from there only.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sandbox_ai.evidence import collect, quote_line
+from sandbox_ai.evidence import collect, line_reference
 from sandbox_ai.models import AnalysisError, canonical
 from sandbox_ai.service import Analyzer
 from sandbox_ai.store import Store
@@ -59,7 +59,7 @@ def analysis_reply(messages, predicate=None):
     return dict(role='assistant', content=canonical(dict(
         summary='脚本化模型：仅用于验证链路，不作诊断结论。',
         facts=[dict(statement='执行报告记录了本次结果。',
-                    citations=[dict(id=chosen['id'], quote=quote_line(chosen['text']))])],
+                    citations=[line_reference(chosen)])],
         hypotheses=[], missing_info=[], next_steps=[])))
 
 

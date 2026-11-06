@@ -5,7 +5,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
-from .evidence import quote_line
+from .evidence import line_reference
 from .models import AnalysisError, canonical, digest
 from .store import normalize
 
@@ -17,7 +17,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 class CompatibleProvider:
     def __init__(self, base_url, model, embedding_model='', key_env='SANDBOX_AI_API_KEY', timeout=90,
-                 allow_local_http=False, max_tokens=3000):
+                 allow_local_http=False, max_tokens=3000, rerank_model=''):
         parsed = urlsplit(base_url)
         local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
         if (parsed.scheme != 'https' and not (allow_local_http and local and parsed.scheme == 'http')
@@ -40,6 +40,10 @@ class CompatibleProvider:
         self.timeout = timeout
         self.identity = 'compatible:' + digest([self.base, model])
         self.embedding_identity = 'embedding:' + digest([self.base, embedding_model])
+        # The reranker is a second stage over the fused list, so its identity matters for
+        # invalidation the same way the embedding model does.
+        self.rerank_model = rerank_model
+        self.rerank_identity = 'rerank:' + digest([self.base, rerank_model]) if rerank_model else ''
         self.usage = []
 
     def post(self, endpoint, payload):
@@ -88,6 +92,39 @@ class CompatibleProvider:
         except (KeyError, IndexError, TypeError):
             raise AnalysisError('Unexpected embedding response format') from None
 
+    def rerank(self, query, documents):
+        """Second-stage scoring: return [(index, score), ...] for every document.
+
+        A reranker that returns a partial ranking, a bad index or a non-numeric score is a
+        failure, not a hint: the caller degrades to the fused order and says so.
+        """
+        if not self.rerank_model:
+            raise AnalysisError('A rerank model is required for two-stage retrieval')
+        if not documents or len(documents) > 64 or not isinstance(query, str) or len(query) > 4000:
+            raise AnalysisError('Invalid rerank request')
+        for document in documents:
+            if not isinstance(document, str) or len(document) > 8000:
+                raise AnalysisError('Rerank documents must be bounded strings')
+        response = self.post('/rerank', dict(model=self.rerank_model, query=query,
+                                             documents=documents, top_n=len(documents)))
+        results = response.get('results') if isinstance(response, dict) else None
+        if not isinstance(results, list) or len(results) != len(documents):
+            raise AnalysisError('Rerank returned an incomplete or malformed ranking')
+        ranked = []
+        seen = set()
+        for entry in results:
+            if not isinstance(entry, dict):
+                raise AnalysisError('Invalid rerank result')
+            index, score = entry.get('index'), entry.get('relevance_score')
+            if type(index) is not int or not 0 <= index < len(documents) or index in seen:
+                raise AnalysisError('Invalid rerank index')
+            if type(score) not in (int, float):
+                raise AnalysisError('Invalid rerank score')
+            seen.add(index)
+            ranked.append((index, float(score)))
+        ranked.sort(key=lambda pair: (-pair[1], pair[0]))
+        return ranked
+
 
 class DemoProvider:
     """Deterministic plumbing demo, deliberately not an AI or diagnosis benchmark."""
@@ -101,7 +138,8 @@ class DemoProvider:
                 function=dict(name='search_history', arguments=canonical({'query': initial['question']})))])
         item = initial['evidence'][0]
         analysis = dict(summary='离线演示：已读取执行证据；未调用真实模型，不推断故障原因。',
-            facts=[dict(statement='执行报告包含以下记录。', citations=[dict(id=item['id'], quote=quote_line(item['text']))])],
+            facts=[dict(statement='执行报告包含以下记录。',
+                        citations=[line_reference(item)])],
             hypotheses=[], missing_info=['需配置真实模型后评估诊断质量。'],
             next_steps=[dict(action='检查报告和日志中的原始证据。', expected_observation='确认执行状态。')])
         return dict(role='assistant', content=canonical(analysis))

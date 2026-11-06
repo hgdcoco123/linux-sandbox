@@ -158,6 +158,17 @@ def quote_line(text, limit=160):
     return text.strip()[:limit]
 
 
+def line_reference(item, minimum=8):
+    """The 1-based line number a model should cite for this evidence item."""
+    lines = item.get('lines')
+    if lines is None:
+        lines = item['text'].splitlines() or ['']
+    for index, line in enumerate(lines, 1):
+        if len(line.strip()) >= minimum:
+            return dict(id=item['id'], line=index)
+    return dict(id=item['id'], line=1)
+
+
 def chunks(scope, run_id, kind, source, text, location='text', truncated=False):
     text = redact(text)
     for start in range(0, len(text), 1600):

@@ -1,5 +1,7 @@
 """The parts added after the first review: lifecycle evidence, bounded re-reads,
 origin labels and the verification link. No model, no sandbox."""
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -8,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sandbox_ai.cli import demo, stats
-from sandbox_ai.evidence import collect, quote_line, read_span, MAX_READ
+from sandbox_ai.cli import demo, main, stats
+from sandbox_ai.evidence import collect, line_reference, read_span, MAX_READ
 from sandbox_ai.models import AnalysisError, canonical
 from sandbox_ai.service import Analyzer, validate_analysis
 from sandbox_ai.store import Store
@@ -46,8 +48,7 @@ class Reply:
 def answer(messages, index=0):
     item = json.loads(messages[1]['content'])['evidence'][index]
     return dict(role='assistant', content=canonical(dict(summary='summary',
-        facts=[dict(statement='observed', citations=[dict(id=item['id'],
-                                                          quote=quote_line(item['text']))])],
+        facts=[dict(statement='observed', citations=[line_reference(item)])],
         hypotheses=[], missing_info=[], next_steps=[])))
 
 
@@ -93,52 +94,50 @@ class LifecycleEvidence(unittest.TestCase):
 
 
 class CitationRules(unittest.TestCase):
-    def test_short_quote_is_rejected(self):
-        item = dict(id='ev-1', text='undefined reference to calculate_total')
-        value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='undef')])],
-                     hypotheses=[], missing_info=[], next_steps=[])
-        with self.assertRaisesRegex(AnalysisError, 'at least 8'):
-            validate_analysis(value, {'ev-1': item})
+    text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
 
-    def test_reflowed_json_quote_within_one_line_is_accepted(self):
-        # Models reflow compact JSON when they quote it; within one line only whitespace
-        # may differ.
-        text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
-        value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='"summary":"oom",')])],
-                     hypotheses=[], missing_info=[], next_steps=[])
-        validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+    def seen(self):
+        return {'ev-1': dict(id='ev-1', text=self.text)}
 
-    def test_paraphrased_quote_is_still_rejected(self):
-        text = '{\n  "summary": "oom",\n  "verdict": "harness_error"\n}'
-        value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='"summary": "out of memory"')])],
-                     hypotheses=[], missing_info=[], next_steps=[])
-        with self.assertRaisesRegex(AnalysisError, 'single line'):
-            validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+    def value(self, ref):
+        return dict(summary='s', facts=[dict(statement='observed', citations=[ref])],
+                    hypotheses=[], missing_info=[], next_steps=[])
 
-    def test_quote_spanning_two_real_lines_is_rejected(self):
-        # The failure that motivated this rule: both halves exist, but not next to each other.
-        text = '{\n  "exit_code": 0,\n  "verdict": "ok"\n}'
-        value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='"exit_code": 0,\\n  "verdict": "ok"')])],
-                     hypotheses=[], missing_info=[], next_steps=[])
-        with self.assertRaisesRegex(AnalysisError, 'single line'):
-            validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+    def test_a_line_reference_is_accepted_and_resolved(self):
+        resolved = []
+        validate_analysis(self.value(dict(id='ev-1', line=2)), self.seen(), resolved)
+        # The program, not the model, supplies the text: that is the whole point.
+        self.assertEqual(resolved, [dict(id='ev-1', line=2, text='"summary": "oom",')])
 
-    def test_double_escaped_quote_within_one_line_is_accepted(self):
-        # A model can escape a quote once too often inside its JSON; unescaping recovers
-        # exactly the characters that are on that line.
-        text = '{\n  "stdout": {"eof": true}\n}'
-        value = dict(summary='s', facts=[dict(statement='observed',
-                     citations=[dict(id='ev-1', quote='\\"stdout\\": {\\"eof\\": true}')])],
-                     hypotheses=[], missing_info=[], next_steps=[])
-        validate_analysis(value, {'ev-1': dict(id='ev-1', text=text)})
+    def test_a_line_outside_the_item_is_rejected(self):
+        for line in (0, 9, -1, '2', None, True):
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(AnalysisError, 'line must be'):
+                    validate_analysis(self.value(dict(id='ev-1', line=line)), self.seen())
+
+    def test_an_unknown_evidence_id_is_rejected(self):
+        with self.assertRaisesRegex(AnalysisError, 'not supplied'):
+            validate_analysis(self.value(dict(id='ev-x', line=1)), self.seen())
+
+    def test_a_trivial_line_cannot_support_a_claim(self):
+        # `{` and `}` exist, but citing them proves nothing.
+        item = {'ev-1': dict(id='ev-1', text='{\n  "x": 1\n}')}
+        with self.assertRaisesRegex(AnalysisError, 'shorter than 8'):
+            validate_analysis(self.value(dict(id='ev-1', line=3)), item)
+
+    def test_the_optional_quote_must_match_that_line(self):
+        validate_analysis(self.value(dict(id='ev-1', line=2, quote='"summary":"oom",')), self.seen())
+        with self.assertRaisesRegex(AnalysisError, 'does not match'):
+            validate_analysis(self.value(dict(id='ev-1', line=3, quote='"summary":"oom",')), self.seen())
+
+    def test_a_citation_cannot_be_shaped_like_a_quote_only(self):
+        # The old contract (id + quote, no line) must not slip through.
+        with self.assertRaisesRegex(AnalysisError, 'expected'):
+            validate_analysis(self.value(dict(id='ev-1', quote='"summary": "oom"')), self.seen())
 
     def test_report_evidence_is_pretty_printed(self):
-        # Compact JSON is hard to quote exactly and hard to read; the report is stored
-        # indented so a model can copy a line instead of re-serialising it.
+        # Compact JSON is hard to point at line by line and hard to read; the report is
+        # stored indented so every line is a citable unit.
         with tempfile.TemporaryDirectory() as temp:
             folder = run_dir(Path(temp), report=dict(run_id='run-x', summary='oom', metrics=dict(oom=1)))
             bundle = collect('p', folder)
@@ -193,7 +192,7 @@ class OriginsAndVerification(unittest.TestCase):
             payload = json.loads([m for m in messages if m['role'] == 'tool'][-1]['content'])
             return dict(role='assistant', content=canonical(dict(summary='read',
                 facts=[dict(statement='the log names the symbol',
-                            citations=[dict(id=payload['id'], quote=quote_line(payload['text'], 20))])],
+                            citations=[line_reference(payload)])],
                 hypotheses=[], missing_info=[], next_steps=[])))
         provider = Reply([call('read_output', dict(stream='stderr.bin', offset=0, length=20)), cite_span])
         result = Analyzer(self.store, provider).analyze('p', 'run-run-current', 'show the log')
@@ -208,6 +207,46 @@ class OriginsAndVerification(unittest.TestCase):
         self.assertEqual(result['metrics']['tool_denied'], 1)
         self.assertEqual(result['metrics']['tool_calls'], 1)
         self.assertEqual(result['status'], 'completed')
+
+    def test_rerank_degrades_instead_of_failing(self):
+        class Broken:
+            def rerank(self, query, documents):
+                raise AnalysisError('vendor rejected the request')
+        provider = Reply([answer])
+        result = Analyzer(self.store, provider, reranker=Broken()).analyze(
+            'p', 'run-run-current', 'why did calculate_total fail?')
+        self.assertEqual(result['status'], 'completed')
+        self.assertFalse(result['metrics']['reranked'])
+        self.assertTrue([w for w in result['warnings'] if 'Rerank unavailable' in w])
+
+    def test_rerank_reorders_the_fused_candidates(self):
+        calls = {}
+
+        class Reverser:
+            def rerank(self, query, documents):
+                calls['documents'] = len(documents)
+                return [(index, float(index)) for index in reversed(range(len(documents)))]
+
+        provider = Reply([answer])
+        result = Analyzer(self.store, provider, reranker=Reverser()).analyze(
+            'p', 'run-run-current', 'why did calculate_total fail?')
+        self.assertTrue(result['metrics']['reranked'])
+        self.assertIn('+rerank', result['metrics']['retrieval'])
+        self.assertGreater(calls['documents'], 0)
+
+    def test_explain_prints_a_report_and_returns_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = run_dir(root/'runs', 'explain-case')
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = main(['--provider', 'demo', '--db', str(root/'s.db'), '--scope', 'p',
+                             'explain', '--run-dir', str(folder)])
+            printed = buffer.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn('execution: nonzero_exit', printed)
+        self.assertIn('[已确认]', printed)
+        self.assertIn('retrieval:', printed)
 
 
 class Aggregates(unittest.TestCase):

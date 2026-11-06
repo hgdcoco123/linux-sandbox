@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from sandbox_ai.cli import demo
-from sandbox_ai.evidence import collect, quote_line, read_file, MAX_FILE
+from sandbox_ai.evidence import collect, line_reference, read_file, MAX_FILE
 from sandbox_ai.models import AnalysisError, Bundle, evidence, canonical
 from sandbox_ai.providers import DemoProvider, CompatibleProvider
 from sandbox_ai.service import Analyzer, validate_analysis
@@ -36,7 +36,7 @@ def answer(messages):
     item = json.loads(messages[1]['content'])['evidence'][0]
     return dict(role='assistant', content=canonical(dict(summary='Evidence summary',
         facts=[dict(statement='The report records this value.',
-                    citations=[dict(id=item['id'], quote=quote_line(item['text']))])],
+                    citations=[line_reference(item)])],
         hypotheses=[], missing_info=[], next_steps=[])))
 
 
@@ -193,7 +193,7 @@ class AnalysisTests(Fixture):
         def forged(messages):
             message = answer(messages)
             value = json.loads(message['content'])
-            value['facts'][0]['citations'][0]['quote'] = 'invented evidence'
+            value['facts'][0]['citations'][0]['line'] = 9999
             message['content'] = canonical(value)
             return message
         result = Analyzer(self.store, ScriptedProvider([forged, answer])).analyze('project-a', 'run-demo', 'why?')
