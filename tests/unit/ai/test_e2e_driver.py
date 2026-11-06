@@ -13,6 +13,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from sandbox_ai.evidence import collect
 from sandbox_ai.models import AnalysisError

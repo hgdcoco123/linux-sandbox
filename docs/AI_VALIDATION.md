@@ -9,8 +9,8 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-结果：**66 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
-`test_verification.py` 7 / `test_e2e_driver.py` 4）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
+结果：**78 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 7 /
+`test_verification.py` 7 / `test_e2e_driver.py` 4 / `test_finish.py` 12）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
 
 同一套测试已注册进 CTest：
 
@@ -21,7 +21,7 @@ ctest --test-dir build
 `ai_contracts` 作为第 34 个测试运行并通过（`100% tests passed, 0 tests failed out of 34`；
 `isolation_integration` 在无 systemd 委派时跳过）。
 
-`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 66 项契约测试、跑离线 demo 并断言
+`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 78 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
 
