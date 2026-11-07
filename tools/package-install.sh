@@ -15,9 +15,12 @@ bindir="$prefix/bin"
 [ -x "$here/bin/sandbox" ] || { echo "install: $here does not look like a package (no bin/sandbox)" >&2; exit 1; }
 
 mkdir -p "$bindir" 2>/dev/null || { echo "install: cannot create $bindir; pass a writable prefix" >&2; exit 1; }
+# `sbx` is an alias for `sandbox`: on Ubuntu the name `sandbox` is also provided by
+# policycoreutils-python-utils (SELinux), and a user who installs that gets a different program.
 for exe in sandbox sandbox-launcher sandbox-ai; do
     [ -e "$here/bin/$exe" ] && ln -sfn "$here/bin/$exe" "$bindir/$exe"
 done
+[ -e "$here/bin/sandbox" ] && ln -sfn "$here/bin/sandbox" "$bindir/sbx"
 
 echo "install: linked into $bindir"
 "$here/bin/sandbox" --version || { echo "install: the binary does not start on this system" >&2; exit 1; }

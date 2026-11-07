@@ -103,11 +103,16 @@ root="$prefix/$name"
 # ---- entry points ----------------------------------------------------------
 bindir="$prefix/bin"
 mkdir -p "$bindir" 2>/dev/null || privileged mkdir -p "$bindir"
+# `sbx` is the same binary under a name that cannot collide with Ubuntu's SELinux `sandbox`.
 for exe in sandbox sandbox-launcher sandbox-ai; do
     [ -e "$root/bin/$exe" ] || continue
     if [ -w "$bindir" ]; then ln -sfn "$root/bin/$exe" "$bindir/$exe"
     else privileged ln -sfn "$root/bin/$exe" "$bindir/$exe"; fi
 done
+if [ -e "$root/bin/sandbox" ]; then
+    if [ -w "$bindir" ]; then ln -sfn "$root/bin/sandbox" "$bindir/sbx"
+    else privileged ln -sfn "$root/bin/sandbox" "$bindir/sbx"; fi
+fi
 case ":${PATH}:" in
     *":$bindir:"*) ;;
     *) say "== add this once, then open a new shell:"

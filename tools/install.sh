@@ -32,6 +32,9 @@ mkdir -p "$prefix/bin" "$prefix/share/linux-sandbox/sdk" \
          "$prefix/share/linux-sandbox/sandbox_ai" || fail "cannot create $prefix layout"
 
 install -m 0755 "$binary" "$prefix/bin/sandbox" || fail "copying sandbox"
+# Same binary under a name that cannot collide with Ubuntu's SELinux `sandbox`
+# (policycoreutils-python-utils provides one).
+ln -sfn sandbox "$prefix/bin/sbx" || fail "linking sbx"
 # The CLI resolves the launcher next to itself, so it must live in the same directory.
 install -m 0755 "$launcher" "$prefix/bin/sandbox-launcher" || fail "copying sandbox-launcher"
 install -m 0644 "$root"/sdk/*.py "$prefix/share/linux-sandbox/sdk/" || fail "copying the SDK"

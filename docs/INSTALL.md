@@ -71,6 +71,8 @@ sandbox doctor
 （Debian/Ubuntu 上分别是 `libseccomp2`、`libprotobuf32`/`libprotobuf32t64`，且 soname 必须匹配）。
 `tools/pack.sh` 会在打包时把实际依赖打印出来。
 
+**命令名冲突**：Ubuntu 的 `policycoreutils-python-utils`（SELinux）也提供一个叫 `sandbox` 的命令。
+安装器会把同一份二进制同时链接成 `sbx`，如果你装过那个包，用 `sbx` 更稳（行为完全相同）。
 **glibc 下限**：发布包在 Ubuntu 24.04 上构建，要求 `GLIBC_2.38` / `GLIBCXX_3.4.32`。
 更老的系统（如 Ubuntu 22.04）请从源码构建。
 
