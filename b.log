@@ -1,15 +1,22 @@
-[  1%] Building CXX object CMakeFiles/sandbox-fixture.dir/tests/fixtures/probe.cpp.o
-[  2%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/outcome.cpp.o
-[  3%] Building CXX object CMakeFiles/sandbox_writer.dir/src/runtime/bounded_writer.cpp.o
-[  4%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/ids.cpp.o
+[  1%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/ids.cpp.o
+[  2%] Building CXX object CMakeFiles/sandbox-fixture.dir/tests/fixtures/probe.cpp.o
+[  3%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/outcome.cpp.o
+[  4%] Building CXX object CMakeFiles/sandbox_writer.dir/src/runtime/bounded_writer.cpp.o
+/home/coco/linux-sandbox/tests/fixtures/probe.cpp: In function ‘int main(int, char**)’:
+/home/coco/linux-sandbox/tests/fixtures/probe.cpp:79:16: warning: ignoring return value of ‘ssize_t write(int, const void*, size_t)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+   79 |         ::write(1, "hello\n", 6);
+      |         ~~~~~~~^~~~~~~~~~~~~~~~~
+/home/coco/linux-sandbox/tests/fixtures/probe.cpp:80:16: warning: ignoring return value of ‘ssize_t write(int, const void*, size_t)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+   80 |         ::write(2, "error\n", 6);
+      |         ~~~~~~~^~~~~~~~~~~~~~~~~
 [  5%] Linking CXX executable sandbox-fixture
 [  6%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/result.cpp.o
 [  6%] Built target sandbox-fixture
 [  7%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/request.cpp.o
-[  8%] Linking CXX static library libsandbox_writer.a
-[  9%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/ops.cpp.o
+[  8%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/ops.cpp.o
+[  9%] Linking CXX static library libsandbox_writer.a
+[  9%] Built target sandbox_writer
 [ 10%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/wire.cpp.o
-[ 10%] Built target sandbox_writer
 [ 11%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/supervisor.cpp.o
 [ 12%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/prepare.cpp.o
 [ 13%] Building CXX object CMakeFiles/sandbox_core.dir/src/core/control.cpp.o
@@ -23,8 +30,8 @@
 [ 19%] Built target sandbox_core
 [ 20%] Building CXX object CMakeFiles/core_tests.dir/tests/unit/core_tests.cpp.o
 [ 21%] Building CXX object CMakeFiles/prepare_tests.dir/tests/unit/prepare_tests.cpp.o
-[ 22%] Building CXX object CMakeFiles/wire_tests.dir/tests/experimental/wire_tests.cpp.o
-[ 23%] Building CXX object CMakeFiles/supervisor_tests.dir/tests/unit/supervisor_tests.cpp.o
+[ 22%] Building CXX object CMakeFiles/supervisor_tests.dir/tests/unit/supervisor_tests.cpp.o
+[ 23%] Building CXX object CMakeFiles/wire_tests.dir/tests/experimental/wire_tests.cpp.o
 [ 24%] Linking CXX executable supervisor_tests
 [ 24%] Built target supervisor_tests
 [ 25%] Building CXX object CMakeFiles/control_tests.dir/tests/unit/control_tests.cpp.o
@@ -34,40 +41,40 @@
 [ 28%] Linking CXX executable wire_tests
 [ 28%] Built target wire_tests
 [ 29%] Building CXX object CMakeFiles/workspace_tests.dir/tests/unit/workspace_tests.cpp.o
-[ 30%] Linking CXX executable control_tests
-[ 31%] Linking CXX executable workspace_tests
-[ 31%] Built target control_tests
+[ 30%] Linking CXX executable workspace_tests
+[ 31%] Linking CXX executable control_tests
+[ 31%] Built target workspace_tests
 [ 32%] Building CXX object CMakeFiles/ops_json_tests.dir/tests/unit/ops_json_tests.cpp.o
-[ 32%] Built target workspace_tests
+[ 32%] Built target control_tests
 [ 33%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/config.cpp.o
 [ 34%] Linking CXX executable core_tests
 [ 34%] Built target core_tests
 [ 35%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/report.cpp.o
-[ 36%] Linking CXX executable fault_tests
-[ 37%] Linking CXX executable ops_json_tests
-[ 37%] Built target fault_tests
-[ 38%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/command_model.cpp.o
-[ 38%] Built target ops_json_tests
-[ 39%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/task.cpp.o
+[ 36%] Linking CXX executable ops_json_tests
+[ 36%] Built target ops_json_tests
+[ 37%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/command_model.cpp.o
+[ 38%] Building CXX object CMakeFiles/sandbox_model.dir/src/model/task.cpp.o
+[ 39%] Linking CXX executable fault_tests
+[ 39%] Built target fault_tests
 [ 40%] Linking CXX static library libsandbox_model.a
 [ 40%] Built target sandbox_model
-[ 41%] Building CXX object CMakeFiles/session_model_tests.dir/tests/unit/session_model_tests.cpp.o
+[ 41%] Building CXX object CMakeFiles/sandbox_metrics.dir/src/resources/metrics.cpp.o
 [ 42%] Building CXX object CMakeFiles/model_tests.dir/tests/unit/model_tests.cpp.o
-[ 43%] Building CXX object CMakeFiles/sandbox_metrics.dir/src/resources/metrics.cpp.o
-[ 44%] Building CXX object CMakeFiles/session_contract_tests.dir/tests/unit/session_contract_tests.cpp.o
+[ 43%] Building CXX object CMakeFiles/session_contract_tests.dir/tests/unit/session_contract_tests.cpp.o
+[ 44%] Building CXX object CMakeFiles/session_model_tests.dir/tests/unit/session_model_tests.cpp.o
 [ 45%] Linking CXX executable session_model_tests
 [ 45%] Built target session_model_tests
 [ 46%] Building CXX object CMakeFiles/task_tests.dir/tests/unit/task_tests.cpp.o
-[ 47%] Linking CXX executable session_contract_tests
-[ 48%] Linking CXX static library libsandbox_metrics.a
-[ 48%] Built target session_contract_tests
-[ 50%] Building CXX object CMakeFiles/writer_benchmark.dir/benchmarks/writer_benchmark.cpp.o
-[ 50%] Built target sandbox_metrics
-[ 51%] Building CXX object CMakeFiles/metrics_tests.dir/tests/unit/metrics_tests.cpp.o
-[ 52%] Linking CXX executable model_tests
-[ 52%] Built target model_tests
-[ 53%] Running cpp protocol buffer compiler on proto/session_v1.proto
-[ 54%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/platform/linux.cpp.o
+[ 47%] Linking CXX static library libsandbox_metrics.a
+[ 47%] Built target sandbox_metrics
+[ 48%] Building CXX object CMakeFiles/writer_benchmark.dir/benchmarks/writer_benchmark.cpp.o
+[ 50%] Linking CXX executable session_contract_tests
+[ 50%] Built target session_contract_tests
+[ 51%] Running cpp protocol buffer compiler on proto/session_v1.proto
+[ 52%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/platform/linux.cpp.o
+[ 53%] Linking CXX executable model_tests
+[ 53%] Built target model_tests
+[ 54%] Building CXX object CMakeFiles/metrics_tests.dir/tests/unit/metrics_tests.cpp.o
 [ 55%] Linking CXX executable task_tests
 [ 55%] Built target task_tests
 [ 56%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/platform/environment.cpp.o
@@ -75,9 +82,9 @@
 [ 58%] Linking CXX executable writer_benchmark
 [ 58%] Built target writer_benchmark
 [ 59%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/storage/run_store.cpp.o
-[ 60%] Linking CXX executable metrics_tests
-[ 60%] Built target metrics_tests
-[ 61%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/resources/cgroup.cpp.o
+[ 60%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/resources/cgroup.cpp.o
+[ 61%] Linking CXX executable metrics_tests
+[ 61%] Built target metrics_tests
 [ 62%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/runtime/output_capture.cpp.o
 [ 63%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/runtime/launcher_client.cpp.o
 [ 64%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/runtime/run_session.cpp.o
@@ -94,24 +101,54 @@
 [ 75%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/storage/session_store.cpp.o
 [ 76%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/storage/workspace_service.cpp.o
 [ 77%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/platform/event_loop.cpp.o
+In file included from /usr/include/c++/13/format:47,
+                 from /usr/include/c++/13/bits/chrono_io.h:39,
+                 from /usr/include/c++/13/chrono:3370,
+                 from /home/coco/linux-sandbox/include/sandbox/core/request.hpp:5,
+                 from /home/coco/linux-sandbox/include/sandbox/core/record.hpp:9,
+                 from /home/coco/linux-sandbox/include/sandbox/core/ops.hpp:9,
+                 from /home/coco/linux-sandbox/include/sandbox/storage/session_store.hpp:2,
+                 from /home/coco/linux-sandbox/src/storage/session_store.cpp:1:
+In constructor ‘constexpr std::__detail::__variant::_Uninitialized<_Type, true>::_Uninitialized(std::in_place_index_t<0>, _Args&& ...) [with _Args = {sandbox::Signaled}; _Type = sandbox::Signaled]’,
+    inlined from ‘constexpr std::__detail::__variant::_Variadic_union<_First, _Rest ...>::_Variadic_union(std::in_place_index_t<0>, _Args&& ...) [with _Args = {sandbox::Signaled}; _First = sandbox::Signaled; _Rest = {sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:411:4,
+    inlined from ‘constexpr std::__detail::__variant::_Variadic_union<_First, _Rest ...>::_Variadic_union(std::in_place_index_t<_Np>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}; _First = sandbox::Exited; _Rest = {sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:417:4,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::_Variant_storage(std::in_place_index_t<_Np>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}; _Types = {sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:486:4,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>::_Copy_ctor_base(std::in_place_index_t<_Idx>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}][inherited from std::__detail::__variant::_Variant_storage<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>]’ at /usr/include/c++/13/variant:584:20,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>::_Move_ctor_base(std::in_place_index_t<_Idx>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}][inherited from std::__detail::__variant::_Variant_storage<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>]’ at /usr/include/c++/13/variant:621:20,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>::_Copy_assign_base(std::in_place_index_t<_Idx>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}][inherited from std::__detail::__variant::_Variant_storage<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>]’ at /usr/include/c++/13/variant:659:20,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>::_Move_assign_base(std::in_place_index_t<_Idx>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}][inherited from std::__detail::__variant::_Variant_storage<false, sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate>]’ at /usr/include/c++/13/variant:711:20,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<_Types>::_Variant_base(std::in_place_index_t<_Np>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}; _Types = {sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:773:45,
+    inlined from ‘constexpr std::variant<_Types>::variant(std::in_place_index_t<_Np>, _Args&& ...) [with long unsigned int _Np = 1; _Args = {sandbox::Signaled}; _Tp = sandbox::Signaled; <template-parameter-2-4> = void; _Types = {sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:1473:57,
+    inlined from ‘constexpr std::variant<_Types>::variant(_Tp&&) [with _Tp = sandbox::Signaled; <template-parameter-2-2> = void; <template-parameter-2-3> = void; _Tj = sandbox::Signaled; <template-parameter-2-5> = void; _Types = {sandbox::Exited, sandbox::Signaled, sandbox::TimedOut, sandbox::Cancelled, sandbox::Oom, sandbox::StartupFailed, sandbox::SupervisionFailed, sandbox::Indeterminate}]’ at /usr/include/c++/13/variant:1444:27,
+    inlined from ‘sandbox::ExecutionOutcome::ExecutionOutcome(T) [with T = sandbox::Signaled]’ at /home/coco/linux-sandbox/include/sandbox/core/outcome.hpp:77:61,
+    inlined from ‘sandbox::ExecutionOutcome sandbox::{anonymous}::outcome_of_legacy(const sandbox::Json&)’ at /home/coco/linux-sandbox/src/storage/session_store.cpp:52:105,
+    inlined from ‘std::optional<sandbox::FinishedCommand> sandbox::{anonymous}::decode_finished_record(const sandbox::Json&)’ at /home/coco/linux-sandbox/src/storage/session_store.cpp:130:35,
+    inlined from ‘std::optional<sandbox::FinishedCommand> sandbox::{anonymous}::read_finished_record(const std::filesystem::__cxx11::path&)’ at /home/coco/linux-sandbox/src/storage/session_store.cpp:148:63:
+/usr/include/c++/13/variant:224:11: warning: ‘*(std::_Optional_payload_base<int>::_Storage<int, true>*)((char*)&signal + offsetof(const std::optional<int>,std::optional<int>::<unnamed>.std::_Optional_base<int, true, true>::<unnamed>)).std::_Optional_payload_base<int>::_Storage<int, true>::_M_value’ may be used uninitialized [-Wmaybe-uninitialized]
+  224 |         : _M_storage(std::forward<_Args>(__args)...)
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/coco/linux-sandbox/src/storage/session_store.cpp: In function ‘std::optional<sandbox::FinishedCommand> sandbox::{anonymous}::read_finished_record(const std::filesystem::__cxx11::path&)’:
+/home/coco/linux-sandbox/src/storage/session_store.cpp:45:16: note: ‘*(std::_Optional_payload_base<int>::_Storage<int, true>*)((char*)&signal + offsetof(const std::optional<int>,std::optional<int>::<unnamed>.std::_Optional_base<int, true, true>::<unnamed>)).std::_Optional_payload_base<int>::_Storage<int, true>::_M_value’ was declared here
+   45 |     const auto signal = command.contains("signal") && command.at("signal").is_number()
+      |                ^~~~~~
 [ 78%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/runtime/batch.cpp.o
 [ 79%] Linking CXX static library libsandbox_runtime.a
 [ 79%] Built target sandbox_runtime
 [ 80%] Building CXX object CMakeFiles/sandbox.dir/apps/cli/main.cpp.o
-[ 82%] Building CXX object CMakeFiles/sandbox-launcher.dir/apps/launcher/main.cpp.o
-[ 81%] Building CXX object CMakeFiles/session_wire_tests.dir/tests/integration/session_wire_tests.cpp.o
+[ 81%] Building CXX object CMakeFiles/sandbox-launcher.dir/apps/launcher/main.cpp.o
+[ 82%] Building CXX object CMakeFiles/session_wire_tests.dir/tests/integration/session_wire_tests.cpp.o
 [ 83%] Building CXX object CMakeFiles/control_fd_tests.dir/tests/integration/control_fd_tests.cpp.o
 [ 84%] Linking CXX executable control_fd_tests
 [ 84%] Built target control_fd_tests
 [ 85%] Building CXX object CMakeFiles/output_runtime_tests.dir/tests/integration/output_runtime_tests.cpp.o
-[ 86%] Linking CXX executable sandbox-launcher
-[ 86%] Built target sandbox-launcher
-[ 87%] Building CXX object CMakeFiles/session_store_tests.dir/tests/integration/session_store_tests.cpp.o
-[ 88%] Linking CXX executable session_wire_tests
+[ 86%] Linking CXX executable session_wire_tests
+[ 87%] Linking CXX executable output_runtime_tests
+[ 87%] Built target output_runtime_tests
+[ 88%] Building CXX object CMakeFiles/session_store_tests.dir/tests/integration/session_store_tests.cpp.o
 [ 88%] Built target session_wire_tests
 [ 89%] Building CXX object CMakeFiles/publish_tests.dir/tests/integration/publish_tests.cpp.o
-[ 90%] Linking CXX executable output_runtime_tests
-[ 90%] Built target output_runtime_tests
+[ 90%] Linking CXX executable sandbox-launcher
+[ 90%] Built target sandbox-launcher
 [ 91%] Building CXX object CMakeFiles/mount_source_tests.dir/tests/integration/mount_source_tests.cpp.o
 [ 92%] Linking CXX executable mount_source_tests
 [ 92%] Built target mount_source_tests
@@ -122,8 +159,8 @@
 [ 96%] Linking CXX executable session_store_tests
 [ 96%] Built target session_store_tests
 [ 97%] Linking CXX executable session_runtime_tests
-[ 98%] Linking CXX executable sandbox
-[ 98%] Built target session_runtime_tests
-[100%] Linking CXX executable session_wire_bridge
-[100%] Built target session_wire_bridge
+[ 97%] Built target session_runtime_tests
+[ 98%] Linking CXX executable session_wire_bridge
+[ 98%] Built target session_wire_bridge
+[100%] Linking CXX executable sandbox
 [100%] Built target sandbox

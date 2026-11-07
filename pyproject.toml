@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "linux-sandbox"
-version = "0.5.1"
+version = "0.5.2"
 description = "Isolated execution with verifiable failure explanations: a Linux sandbox and an evidence-analysis layer"
 readme = "README.md"
 license = { text = "MIT" }

@@ -2,12 +2,16 @@
 
 版本号来自 `CMakeLists.txt` 的 `project(... VERSION)`；`sandbox --version` 打的是同一个值。
 
-## 未发布
+## 0.5.2
 
-- `sandbox doctor` 在隔离不可用时给出可直接执行的处理建议：`isolation_probe.remedy` 字段按 `stage` 与环境策略
-  （`apparmor_restrict_unprivileged_userns`、`unprivileged_userns_clone`、cgroup）生成，同时打印到 stderr，
-  不再只报一个 stage 让用户自己猜。
-- 文档新增 `docs/INSTALL.md` 3.0：stage → 处理方式对照表，含只对 launcher 放行 `userns,` 的 AppArmor 配置。
+- 发布包自带 `install.sh`：解包后 `sh install.sh` 即可链接 `sandbox` / `sandbox-launcher` /
+  `sandbox-ai` 到 `~/.local/bin`、跑一次冒烟测试（必须返回 10）、并报告隔离是否可用（不可用时打印
+  `doctor` 给出的 stage 与处理建议）。**不需要 git、不需要网络、不需要 root。**
+- `sandbox doctor` 在隔离不可用时输出 `isolation_probe.remedy`，并在 stderr 打一行可直接执行的建议；
+  文档新增 `INSTALL.md` 3.0（stage → 处理方式，含只对 launcher 放行 `userns,` 的 AppArmor 配置）。
+- `tools/pack.sh` 支持 `SBX_BUILD_DIR`，并打印产物的真实动态依赖。
+- 新增 `docs/INSTALL.md` 2.2：没有 git、也连不上 GitHub 的安装路径（只需 `tar` 与 `sha256sum`）。
+
 
 ## 0.5.1
 
@@ -63,7 +67,14 @@
 固定路径安装与普通用户运行、会话与批处理、workspace 配额与会话累计导出、控制通道 fd 化移交、
 报告 schema 2（`workspace` 字段）。更早的重构记录保留在仓库的 git 历史中。
 
-## 未发布
+## 0.5.2
 
+- 发布包自带 `install.sh`：解包后 `sh install.sh` 即可链接 `sandbox` / `sandbox-launcher` /
+  `sandbox-ai` 到 `~/.local/bin`、跑一次冒烟测试（必须返回 10）、并报告隔离是否可用（不可用时打印
+  `doctor` 给出的 stage 与处理建议）。**不需要 git、不需要网络、不需要 root。**
+- `sandbox doctor` 在隔离不可用时输出 `isolation_probe.remedy`，并在 stderr 打一行可直接执行的建议；
+  文档新增 `INSTALL.md` 3.0（stage → 处理方式，含只对 launcher 放行 `userns,` 的 AppArmor 配置）。
+- `tools/pack.sh` 支持 `SBX_BUILD_DIR`，并打印产物的真实动态依赖。
+- 新增 `docs/INSTALL.md` 2.2：没有 git、也连不上 GitHub 的安装路径（只需 `tar` 与 `sha256sum`）。
 - 报告 JSON Schema 与 golden 快照、CI 中运行分析层测试、预编译发行包与容器镜像。
 - `pip install .` 已验证：wheel 构建、安装、`sandbox-ai` 入口、`.[sdk]` 的 protobuf。

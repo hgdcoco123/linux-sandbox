@@ -58,7 +58,7 @@ sh linux-sandbox/tools/quick-install.sh
 不想跑脚本就手动来（等价命令，需要自己 `sudo mkdir`）：
 
 ```bash
-ver=0.5.1
+ver=0.5.2
 file="linux-sandbox-${ver}-linux-x86_64.tar.gz"
 curl -fL --retry 3 --retry-delay 2 -o "$file" \
   "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}"
@@ -159,8 +159,8 @@ host
 1. **换一种下载方式**（不是网络问题的话，`-o` 明确写文件名比 `-O` 稳）：
 
    ```bash
-   curl -fL --retry 3 --retry-delay 2 -o linux-sandbox-0.5.1-linux-x86_64.tar.gz \
-     https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.1/linux-sandbox-0.5.1-linux-x86_64.tar.gz
+   curl -fL --retry 3 --retry-delay 2 -o linux-sandbox-0.5.2-linux-x86_64.tar.gz \
+     https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.2/linux-sandbox-0.5.2-linux-x86_64.tar.gz
    ```
 
    注意是 `-O`（大写字母 O，保存到文件）而不是 `-0`（数字零，会让 curl 输出到终端，什么也不下载）。
@@ -169,10 +169,10 @@ host
 
    ```bash
    # 能上网的机器
-   sha256sum linux-sandbox-0.5.1-linux-x86_64.tar.gz
-   scp linux-sandbox-0.5.1-linux-x86_64.tar.gz user@target:/tmp/
+   sha256sum linux-sandbox-0.5.2-linux-x86_64.tar.gz
+   scp linux-sandbox-0.5.2-linux-x86_64.tar.gz user@target:/tmp/
    # 目标机器，校对官方校验和
-   cd /tmp && sha256sum -c linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256
+   cd /tmp && sha256sum -c linux-sandbox-0.5.2-linux-x86_64.tar.gz.sha256
    ```
 
 3. **从源码构建**（同样需要一个能访问仓库的方式）：
@@ -185,6 +185,18 @@ host
 
 4. 走代理/镜像时，只把 `github.com` 换成可达的镜像地址，**文件路径保持不变**；下载后务必用
    Release 页上的 `.sha256` 校验一次。
+
+**没有 git、也连不上 GitHub？** 发布包自带安装器（0.5.2 起），只要有 `tar`：
+
+```bash
+sha256sum -c linux-sandbox-0.5.2-linux-x86_64.tar.gz.sha256    # 先校验
+mkdir -p ~/.local && tar -xzf linux-sandbox-0.5.2-linux-x86_64.tar.gz -C ~/.local
+~/.local/linux-sandbox-0.5.2-linux-x86_64/install.sh           # 链接 + 冒烟测试 + 报告隔离
+export PATH="$HOME/.local/bin:$PATH"
+sandbox --version
+```
+
+（详见 [docs/INSTALL.md](docs/INSTALL.md) 2.2；不需要 git、curl、root 或编译器。）
 
 ## 平台与要求
 

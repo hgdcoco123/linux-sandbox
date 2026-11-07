@@ -7,8 +7,8 @@
 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
 -- Found Threads: TRUE  
--- Found Protobuf: /usr/lib/x86_64-linux-gnu/libprotobuf.so (found suitable version "3.21.12", minimum required is "3.21") 
+-- Found Protobuf: /usr/lib/x86_64-linux-gnu/libprotobuf.a (found suitable version "3.21.12", minimum required is "3.21") 
 -- Found Python3: /usr/bin/python3 (found version "3.12.3") found components: Interpreter 
--- Configuring done (0.8s)
--- Generating done (0.1s)
+-- Configuring done (0.6s)
+-- Generating done (0.0s)
 -- Build files have been written to: /home/coco/linux-sandbox/build

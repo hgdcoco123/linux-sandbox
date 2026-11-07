@@ -76,7 +76,7 @@ sandbox doctor
 
 ## 2.2 没有 git、也连不上 GitHub
 
-这种机器上**不要用 clone 那条路**。预编译包是自包含的，只要有 `tar` 就够：
+这种机器上**不要用 clone 那条路**。0.5.2 起发布包自带 `install.sh`，只要有 `tar` 就够：
 
 ```bash
 # 1) 在任意一台能上网的机器上取得两个文件（浏览器或 curl 都行）
@@ -84,11 +84,12 @@ sandbox doctor
 #    linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256
 # 2) 拷到目标机（U 盘、scp、共享目录都可以），然后：
 
-sha256sum -c linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256   # 必须 OK
+sha256sum -c linux-sandbox-0.5.2-linux-x86_64.tar.gz.sha256   # 必须 OK
 
 mkdir -p ~/.local
-tar -xzf linux-sandbox-0.5.1-linux-x86_64.tar.gz -C ~/.local
-export PATH="$HOME/.local/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"
+tar -xzf linux-sandbox-0.5.2-linux-x86_64.tar.gz -C ~/.local
+~/.local/linux-sandbox-0.5.2-linux-x86_64/install.sh          # 链接 + 冒烟测试 + 报告隔离
+export PATH="$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"' >> ~/.bashrc
 
 sandbox --version                       # sandbox 0.5.1

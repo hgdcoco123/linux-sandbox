@@ -34,6 +34,8 @@ fi
 
 # Documentation and licence travel with the binaries: a tarball without them is not usable.
 install -m 0644 LICENSE CHANGELOG.md README.md "$stage/" || fail "copying top-level docs"
+# The tarball installs itself: no git, no network, no script to fetch separately.
+install -m 0755 tools/package-install.sh "$stage/install.sh" || fail "copying install.sh"
 mkdir -p "$stage/docs"
 install -m 0644 docs/*.md "$stage/docs/" || fail "copying docs"
 
