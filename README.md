@@ -116,6 +116,16 @@ json 3.11.3 与 spdlog 1.14.1 已随源码提供。libseccomp 和 Protobuf C++ �
 
 Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Linux 运行时。
 
+## 在 CI 里用
+
+仓库根目录有 `action.yml`：composite action 在 runner 的 systemd 委派单元里跑一次隔离执行，按 `verdict` 决定这一步成败，并把报告写进 job summary。用法与前置条件见 [docs/CI.md](docs/CI.md)。
+
+```yaml
+- uses: ./
+  with:
+    command: /usr/bin/sandbox-fixture proc-view
+```
+
 ## 5 分钟上手
 
 不想读长文档就直接看 [docs/QUICKSTART.md](docs/QUICKSTART.md)：装、跑一段不可信代码、让程序解释它的失败。

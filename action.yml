@@ -1,0 +1,197 @@
+name: 'Linux Sandbox run'
+description: >-
+  Run one untrusted command inside the Linux sandbox in isolated mode and get a verifiable
+  report: verdict, exit code, delivered artifacts with sha256, and optionally an explanation
+  of what happened. Fails the step when the verdict is not ok.
+author: hgdcoco123
+
+branding:
+  icon: 'shield'
+  color: 'gray-dark'
+
+inputs:
+  command:
+    description: 'Target command line (split like a shell would), e.g. "/usr/bin/sandbox-fixture files"'
+    required: true
+    default: '/usr/bin/sandbox-fixture proc-view'
+  runtime:
+    description: >-
+      Directory used as the target root filesystem. Leave empty to build the test fixture
+      runtime with tools/make_runtime.py, which is enough for a smoke test but not for a real
+      program (see docs/RUNTIME.md).
+    required: false
+    default: ''
+  output:
+    description: 'Host directory mounted at /output; artifacts are published here atomically'
+    required: false
+    default: 'sandbox-output'
+  input:
+    description: 'Host directory mounted read-only at /input (optional)'
+    required: false
+    default: ''
+  timeout-ms:
+    description: 'Wall-clock limit for the target'
+    required: false
+    default: '5000'
+  memory:
+    description: 'Memory limit, bytes or a number with K/M/G'
+    required: false
+    default: '256M'
+  allow-process:
+    description: >-
+      Run the diagnostic backend when this runner has no delegated cgroup. It is NOT isolated;
+      leave it false unless you only want to exercise the plumbing.
+    required: false
+    default: 'false'
+  explain:
+    description: 'Also run sandbox-ai (offline provider) and append the explanation to the job summary'
+    required: false
+    default: 'true'
+  fail-on:
+    description: 'not-ok (default) fails the step unless the verdict is ok; never never fails'
+    required: false
+    default: 'not-ok'
+
+outputs:
+  verdict:
+    description: 'ok / target_failed / harness_error / cleanup_incomplete'
+    value: ${{ steps.run.outputs.verdict }}
+  run-id:
+    description: 'Run identifier; the report is stored in the state root under it'
+    value: ${{ steps.run.outputs.run_id }}
+  artifacts-ok:
+    description: 'true when the artifacts were published'
+    value: ${{ steps.run.outputs.artifacts_ok }}
+  report:
+    description: 'Path to the report JSON'
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build the sandbox
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -x build/sandbox ]; then
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+        fi
+
+    - name: Prepare the runtime
+      shell: bash
+      id: runtime
+      env:
+        INPUT_RUNTIME: ${{ inputs.runtime }}
+      run: |
+        set -euo pipefail
+        if [ -n "${INPUT_RUNTIME}" ]; then
+          runtime="${INPUT_RUNTIME}"
+        else
+          runtime="${RUNNER_TEMP:-/tmp}/sandbox-runtime"
+          python3 tools/make_runtime.py --fixture build/sandbox-fixture --output "${runtime}"
+        fi
+        echo "path=${runtime}" >> "$GITHUB_OUTPUT"
+
+    # The step that actually needs isolation runs inside a delegated transient unit: that is
+    # where a cgroup subtree with the controllers enabled comes from. Everything else stays in
+    # the ordinary job environment.
+    - name: Run in the sandbox
+      shell: bash
+      id: run
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_INPUT: ${{ inputs.input }}
+        INPUT_TIMEOUT: ${{ inputs.timeout-ms }}
+        INPUT_MEMORY: ${{ inputs.memory }}
+        INPUT_ALLOW_PROCESS: ${{ inputs.allow-process }}
+        RUNTIME_PATH: ${{ steps.runtime.outputs.path }}
+      run: |
+        set -uo pipefail
+        extra=""
+        if [ "${INPUT_ALLOW_PROCESS}" = "true" ]; then extra="--allow-process"; fi
+        if [ -n "${INPUT_INPUT}" ]; then extra="${extra} --input ${INPUT_INPUT}"; fi
+        # shellcheck disable=SC2086
+        set +e
+        systemd-run --user --wait --pipe --collect -p Delegate=yes -p Type=exec \
+          /usr/bin/python3 "${GITHUB_ACTION_PATH}/tools/ci_run.py" \
+          --sandbox "${GITHUB_ACTION_PATH}/build/sandbox" \
+          --command "${INPUT_COMMAND}" \
+          --runtime "${RUNTIME_PATH}" \
+          --output "${INPUT_OUTPUT}" \
+          --timeout-ms "${INPUT_TIMEOUT}" \
+          --memory "${INPUT_MEMORY}" \
+          --report sandbox-report.json ${extra} > sandbox-run.txt 2> sandbox-run.err
+        status=$?
+        set -e
+        cat sandbox-run.err >&2 || true
+        {
+          echo '```'
+          cat sandbox-run.txt || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ ! -f sandbox-report.json ]; then
+          echo "::error::the sandbox produced no report (exit ${status}); see the log above"
+          exit 1
+        fi
+        value() { sed -n "s/^$1=//p" sandbox-run.txt | head -1; }
+        {
+          echo "verdict=$(value verdict)"
+          echo "summary=$(value summary)"
+          echo "run_id=$(value run_id)"
+          echo "exit_code=$(value exit_code)"
+          echo "artifacts_ok=$(value artifacts_ok)"
+          echo "report=sandbox-report.json"
+        } >> "$GITHUB_OUTPUT"
+        python3 - <<'PY'
+        import json
+        report = json.load(open('sandbox-report.json'))
+        export = ((report.get('workspace') or {}).get('export') or {})
+        print('| field | value |')
+        print('| --- | --- |')
+        for key in ('verdict', 'summary', 'exit_code', 'run_id'):
+            print('| ' + key + ' | `' + str(report.get(key)) + '` |')
+        print('| artifacts delivered | ' + ('yes' if export.get('ok') else '**no**') + ' |')
+        if export.get('manifest'):
+            print('| manifest | `' + export['manifest'] + '` |')
+        PY
+        if [ "${status}" -eq 3 ]; then
+          echo "::error::the run did not succeed (verdict $(value verdict))"
+        fi
+        echo "${status}" > sandbox-status.txt
+
+    - name: Explain the run
+      if: ${{ inputs.explain == 'true' }}
+      shell: bash
+      run: |
+        set -uo pipefail
+        run_id=$(sed -n 's/^run_id=//p' sandbox-run.txt | head -1)
+        state_root="${RUNNER_TEMP:-/tmp}/sbx-$(id -u)"
+        if [ -z "${run_id}" ] || [ ! -d "${state_root}/${run_id}" ]; then
+          echo "no run directory to explain (state root ${state_root})" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        {
+          echo '### What the analysis layer says'
+          echo '```'
+          python3 -m sandbox_ai --provider demo --db "${RUNNER_TEMP:-/tmp}/sandbox-analysis.db" \
+            --scope ci explain --run-dir "${state_root}/${run_id}" 2>&1 || true
+          echo '```'
+          echo '_Offline provider: the wording is templated. The point is that the layer runs._'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Honor fail-on
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        VERDICT: ${{ steps.run.outputs.verdict }}
+      run: |
+        set -euo pipefail
+        if [ "${FAIL_ON}" = "never" ]; then
+          exit 0
+        fi
+        if [ "${VERDICT}" != "ok" ]; then
+          echo "::error::sandbox verdict is ${VERDICT}, not ok"
+          exit 1
+        fi

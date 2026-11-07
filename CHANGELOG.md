@@ -32,7 +32,8 @@
 
 - `sandbox run -- [options] -- COMMAND...` 一行跑；`--summary` 六行人话；`--quiet` 关 stderr 日志。
 - `sandbox help <cmd>` / `<cmd> --help`；`sandbox prune [--keep N] [--older-than 7d] [--dry-run]`。
-- `sandbox doctor` 报告可用启动模式；`sandbox inspect` / `cancel` / `cleanup`。
+- `sandbox doctor` 报告可用启动模式；`sandbox inspect` / `cancel` / `cleanup`；`sandbox prune` 清理已完成运行。
+- GitHub composite action（`action.yml`）：在 runner 的 systemd 委派单元里跑一次隔离执行，按 `verdict` 决定成败，报告写进 job summary（见 `docs/CI.md`）。
 - `sandbox-ai`（`pip install .` 或 `tools/install.sh` 后可用）：`import` / `analyze` / `explain` /
   `verify` / `stats` / `demo`。
 
@@ -50,3 +51,4 @@
 ## 未发布
 
 - 报告 JSON Schema 与 golden 快照、CI 中运行分析层测试、预编译发行包与容器镜像。
+- `pip install .` 的 wheel 构建本身未在目标环境实测（只有元数据与入口点被验证）。
