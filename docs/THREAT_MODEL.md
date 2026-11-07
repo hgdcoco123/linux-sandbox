@@ -50,11 +50,11 @@
 
 ## 4. 被发现过的真实问题（说明这套东西不是想出来的）
 
-| 现象 | 根因 | 记录 |
+| 现象 | 根因 | 回归测试 |
 |---|---|---|
-| 一次运行报"成功"，但产物没交出来 | init 退出时未读 `STOP`，对端 `ECONNRESET` 丢掉已发的 `INIT_DONE` | `docs/HANDOFF.md` §4.10、`docs/AI_VALIDATION.md` |
-| 会话关闭被误报成 `host_error` | 同上，只是发生在 `close()` 路径 | `docs/HANDOFF.md` |
-| 传输超时后通道复用 | 迟到回执被当成协议错误 | `docs/HANDOFF.md` §4.10 |
+| 一次运行报"成功"，但产物没交出来 | init 退出时未读 `STOP`，对端 `ECONNRESET` 丢掉已发的 `INIT_DONE` | `tests/integration/publish_tests.cpp`、`tests/integration/integration.py` |
+| 会话关闭被误报成 `host_error` | 同上，只是发生在 `close()` 路径 | `tests/integration/session_runtime_tests.cpp`、`tests/integration/sessions.py` |
+| 传输超时后通道复用 | 迟到回执被当成协议错误 | `tests/integration/session_wire_tests.cpp`、`tests/integration/sessions.py` |
 
 这些不是"设计里考虑过"，是**真机上抓到并修掉**的；它们恰好构成"为什么需要这套语义"的最好论据。
 

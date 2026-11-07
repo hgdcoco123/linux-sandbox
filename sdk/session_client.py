@@ -23,7 +23,7 @@ from .sandbox_client import SandboxClient, SandboxError
 def _record_reply(document):
     """Present a stored command record in the reply shape the client expects.
 
-    Storage has its own version (see docs/REDESIGN.md §9): result.json holds a
+    Storage has its own version (see docs/CONTRACT.md): result.json holds a
     core record, not the wire reply. A client that reads it without asking the
     host has to map it, and early builds stored the reply itself, so both shapes
     are accepted here. Keys that never existed for a legacy document are simply

@@ -94,7 +94,7 @@ Json SandboxService::doctor(const fs::path &root) const {
                                 : "development_or_custom"},
         {"running_as_root", ::geteuid() == 0},
         {"runtime_elevation", false},
-        {"guide", "docs/DEPLOYMENT.md"}};
+        {"guide", "docs/INSTALL.md"}};
     return j;
 }
 Json SandboxService::inspect(const std::string &id) const {

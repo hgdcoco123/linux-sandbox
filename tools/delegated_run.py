@@ -35,7 +35,7 @@ if needs_isolation:
     if not probe.get("available", False):
         p.error("isolated execution is unavailable at stage " + str(probe.get("stage")) +
                 ": " + str(probe.get("error", "unknown error")) +
-                ". No policy was changed. See docs/DEPLOYMENT.md; full doctor output: " +
+                ". No policy was changed. See docs/INSTALL.md; full doctor output: " +
                 json.dumps(probe, ensure_ascii=False))
 # The cgroup layout lives in one module so the AI end-to-end driver prepares exactly the
 # same subtree instead of keeping a copy that can drift.

@@ -92,7 +92,7 @@ class ExecutionCore {
 
     // Command supervision only: the outcome is sealed and no further fact changes it.
     // Environment teardown (launcher reap, cgroup removal, workspace delivery) and
-    // writing the report happen later, in the controller. See docs/HANDOFF.md 3.6.
+    // writing the report happen later, in the controller; see src/core/supervisor.cpp.
     [[nodiscard]] bool finished() const noexcept { return finished_; }
     [[nodiscard]] Phase phase() const noexcept { return phase_; }
     [[nodiscard]] const ExecutionResult &result() const noexcept { return result_; }

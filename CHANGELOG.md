@@ -49,12 +49,12 @@
 
 - `docs/THREAT_MODEL.md`（防什么、不防什么、每条声明对应的测试）、`docs/CONTRACT.md`（字段分级与语义承诺）、
   `docs/INSTALL.md`、`docs/RUNTIME.md`、`docs/QUICKSTART.md`、`docs/VALUE.md`（解释是否帮到下一次尝试）、
-  `docs/AI_VALIDATION.md`（已执行/未执行的验证记录）、`docs/RETROSPECTIVE.md`（踩过的坑）。
+  `docs/AI_VALIDATION.md`（已执行/未执行的验证记录）。
 
 ## 0.4 / 0.3（历史）
 
 固定路径安装与普通用户运行、会话与批处理、workspace 配额与会话累计导出、控制通道 fd 化移交、
-报告 schema 2（`workspace` 字段）。更早的记录见 `docs/HANDOFF.md`、`docs/REDESIGN.md`。
+报告 schema 2（`workspace` 字段）。更早的重构记录保留在仓库的 git 历史中。
 
 ## 未发布
 

@@ -5,7 +5,7 @@
 execute v2 请求和请求去重语义保留，内部转为 ExecuteRequest/CommandRecord 类型。
 结果的 stdout/stderr 额外提供 flushed、queue_peak_bytes、backpressure_events、failed_bytes、write_error。
 flushed 指所有排队数据已 write 完成，不是 fsync；EOF 不再单独作为正常结果发布条件。
-单个会话仍串行，独立批次入口与 BatchClient 见 [TASK_ENGINE.md](TASK_ENGINE.md)。
+单个会话仍串行；独立批次入口见 `sandbox batch --help`，Python 侧为 `sdk.batch_client.BatchClient`。
 
 
 ## 0.4 接口更新
@@ -13,7 +13,7 @@ flushed 指所有排队数据已 write 完成，不是 fsync；EOF 不再单独�
 本版使用外部控制协议 v2；下面未带版本的 JSON 示例仍作为兼容 v1 请求可用。
 新客户端 execute 使用 `protocol_version: 2` 和稳定的 `request_id`；同 ID 不同参数报 REQUEST_CONFLICT。
 通过 `{"protocol_version":2,"op":"request-status","request_id":"build-1"}` 查询接受记录和命令结果，关闭后仍可通过 CLI/SDK 查询。
-详见 [协议、错误和恢复约定](CORE_STRUCTURE.md)。
+控制协议的错误与恢复约定见 [CONTRACT.md](CONTRACT.md) 与 `include/sandbox/core/control.hpp`。
 
 SDK：`client.create(config, startup="auto")` 自动复用显式 cgroup_root，否则使用 systemd 用户委派；
 `startup="direct"` 表示由调用者准备环境，`startup="delegated"` 强制创建委派服务。
@@ -151,7 +151,7 @@ finished 表示命令已结算，不表示该次已经读尽，应继续读取�
 
 将请求存为文件后运行 sandbox files --request FILE。
 路径来源必须是可信本地用户，不能直接向不可信远程调用方开放。
-限制、禁止链接、权限与复制失败语义见 PROJECT_GUIDE.md。
+限制、禁止链接、权限与复制失败语义见 [THREAT_MODEL.md](THREAT_MODEL.md)。
 
 ## 6. 本地传输协议
 

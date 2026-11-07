@@ -242,4 +242,3 @@ if report["verdict"] != "ok":
 - 报告字段： [CONTRACT.md](CONTRACT.md)
 - 安全边界： [THREAT_MODEL.md](THREAT_MODEL.md)
 - 分析层细节： [AI_ANALYSIS.md](AI_ANALYSIS.md)、[AI_VALIDATION.md](AI_VALIDATION.md)
-- 架构： [ARCHITECTURE.md](ARCHITECTURE.md)

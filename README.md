@@ -138,7 +138,6 @@ host
 | [docs/AI_VALIDATION.md](docs/AI_VALIDATION.md) | 已执行 / 未执行的验证记录 |
 | [docs/CI.md](docs/CI.md) | 在 CI 中使用，以及托管 runner 上的委派限制 |
 | [docs/RELEASING.md](docs/RELEASING.md)、[docs/PUBLISH.md](docs/PUBLISH.md) | 发布流程 |
-| [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) | 开发过程中真实遇到的故障与修复 |
 
 ## 平台与要求
 
