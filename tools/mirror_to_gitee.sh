@@ -52,7 +52,21 @@ run() {
 
 echo "== mirror: $slug (version $version)"
 echo "== push branches and tags"
-run git push --prune "$remote" "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+if ! run git push --prune "$remote" "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"; then
+    cat >&2 <<EOF
+
+mirror: push was refused. Two ways forward:
+
+  1) register this machine's key on Gitee (then re-run this script):
+     https://gitee.com/profile/sshkeys
+     paste the line printed by:  cat ~/.ssh/id_ed25519.pub
+
+  2) push over HTTPS with a token instead of a key:
+     bash tools/mirror_to_gitee.sh --remote https://<username>:<GITEE_TOKEN>@gitee.com/$slug.git
+     (token from https://gitee.com/profile/personal_access_tokens, scope: projects)
+EOF
+    exit 1
+fi
 
 if [ -z "$release" ]; then
     cat <<EOF
