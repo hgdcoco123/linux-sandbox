@@ -5,7 +5,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      # json and spdlog are vendored; libseccomp and protobuf are system development packages.
+      # Installing only libseccomp made configure fail at find_package(Protobuf 3.21 REQUIRED).
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev protobuf-compiler libprotobuf-dev
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
