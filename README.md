@@ -122,7 +122,7 @@ Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Lin
 |---|---|---|
 | 5 分钟跑一次 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | 已验证 |
 | 跑自己的程序 | [docs/RUNTIME.md](docs/RUNTIME.md) | 已验证 |
-| 在 CI 里用 | [docs/CI.md](docs/CI.md) + 根目录 `action.yml` | 机制已在真机验证；GitHub runner 上待跑一次 |
+| 在 CI 里用 | [docs/CI.md](docs/CI.md) + 根目录 `action.yml` | 已在 GitHub 托管 runner 上跑通；隔离需系统级委派（见 docs/CI.md） |
 | 容器 / 无 systemd | [docs/INSTALL.md](docs/INSTALL.md) 第 3.1 节 + `tools/cgroup_setup.py` | 失败诊断已验证；容器路径待别人跑一次 |
 | 预编译包 | `bash tools/pack.sh` → `dist/*.tar.gz` + sha256 | 已验证 |
 | `pip install` | `pip install .`（`.[sdk]` 带 protobuf） | 已验证（wheel 构建 + 安装 + 入口 + demo） |

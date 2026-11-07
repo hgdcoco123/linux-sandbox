@@ -52,6 +52,31 @@ CI 接线，不适合当安全边界。
 隔离依赖 cgroup 委派与 user namespace；Docker action 里没有 systemd，也没有可用的委派子树，
 只能 `--privileged` 才能工作。composite action 直接跑在 runner 上，用的就是 runner 自己的 systemd。
 
+## GitHub 托管 runner 上的实测（2026-11-07）
+
+推送到 `github.com/hgdcoco123/linux-sandbox` 后，两个 workflow 的结果：
+
+| workflow | 结果 | 说明 |
+|---|---|---|
+| `linux.yml` | **通过** | 构建 + `ctest` 34/34 + 在 `sudo systemd-run --system -p Delegate=yes` 里跑命名空间/cgroup 行为检查 → **GitHub 托管 runner 上隔离是能跑通的**（root 系统级委派） |
+| `action-smoke.yml` | **通过** | 但注解里明确写着 `running the diagnostic backend, which is not isolated` |
+
+结论要分清：
+
+- **root 系统级委派可用**：runner 上 `sudo systemd-run --system -p Delegate=yes` 能给出可用的 cgroup 子树（`linux.yml` 证明了这一点）。
+- **user 级委派不可用**：action 里的 `systemd-run --user` 拿不到 cpu/memory/pids 控制器，`tools/delegated_cgroup.py` 于是失败，action 按设计**显式降级**到诊断后端并给出 warning，报告里 `isolated=false`。
+
+在托管 runner 上想拿到真隔离，用系统级委派包一层（root 执行）：
+
+```bash
+sudo systemd-run --system --wait --pipe --collect -p Delegate=yes -p Type=exec \
+  /usr/bin/python3 tools/ci_run.py --sandbox build/sandbox \
+    --command "/usr/bin/sandbox-fixture files" --runtime "$PWD/runtime" \
+    --output "$PWD/out" --report "$PWD/report.json"
+```
+
+或者用自托管 runner（有 user 级委派）。这条限制写进这里，而不是让用户以为托管 runner 上 action 会隔离。
+
 ## 已验证 / 未验证
 
 - **已验证（2026-11-07，真机）**：`tools/ci_run.py` 在 `systemd-run --user -p Delegate=yes` 里跑真实隔离
