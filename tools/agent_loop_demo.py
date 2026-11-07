@@ -86,10 +86,11 @@ def run_program(binary, work, program, spec_dir):
 
 
 def write_spec(work, task):
-    specs = work/'specs'
+    # One directory per task. A shared directory leaks the other tasks' expected values into
+    # this task's evidence, and the analysis then quotes the wrong requirement.
+    specs = work/'specs'/task['name']
     specs.mkdir(parents=True, exist_ok=True)
-    path = specs/(task['name'] + '.txt')
-    path.write_text(task['spec'])
+    (specs/'spec.txt').write_text(task['spec'])
     return specs
 
 
@@ -167,10 +168,13 @@ def run_loop(args, task, condition, agent, store, provider):
         if condition == 'analysis':
             # The requirement is only visible here, never to the program: that is the
             # information asymmetry the analysis is supposed to close.
-            bundle = collect('loop', attempt['run_dir'], artifact_root=spec_dir,
+            # One scope per task: a shared scope lets one task's evidence act as 'history'
+            # for another, and the analysis then quotes the wrong requirement.
+            scope = 'loop-' + task['name']
+            bundle = collect(scope, attempt['run_dir'], artifact_root=spec_dir,
                              context=task['goal'])
             store.put_bundle(bundle)
-            analysis = Analyzer(store, provider).analyze('loop', bundle.run_id, QUESTION)
+            analysis = Analyzer(store, provider).analyze(scope, bundle.run_id, QUESTION)
             history[-1]['analysis_status'] = analysis['status']
         if condition == 'report':
             # Fair baseline: the whole report, not a subset of it - anyone with the sandbox

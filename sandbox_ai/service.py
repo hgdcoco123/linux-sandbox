@@ -58,6 +58,13 @@ TOOLS = [
          ['template_id', 'reason', 'expected_observation'])]
 
 
+def _named_by(query, source):
+    """True when the query names this file, whole or by basename."""
+    name = str(source or '')
+    base = name.rsplit('/', 1)[-1]
+    return bool(base) and (base in query or name in query)
+
+
 def _compact(text):
     """Whitespace-insensitive form, for quotes that only differ by JSON reflow."""
     return ''.join(text.split())
@@ -277,27 +284,38 @@ class Analyzer:
         candidates += [dict(e.json(), origin='current')
                        for e in bundle.evidence if e.kind in ('report', 'check', 'context', 'config')]
         retrieval_warnings = []
+        # A file the question or the operator's context names is required reading: a 30-byte
+        # spec says what the run was supposed to do, and ranking cannot be trusted to surface
+        # it - its words need not appear in the question, and its name lives in the source,
+        # not in the text.
+        # The caller's context arrives as an evidence item, not as a bundle field; it carries
+        # the goal/requirements text, which is where a filename is usually mentioned.
+        context_text = ' '.join(e.text for e in bundle.evidence if e.kind == 'context')
+        query = question + ' ' + context_text
+        named = [dict(e.json(), origin='current') for e in bundle.evidence
+                 if e.kind in ('artifact', 'source') and _named_by(query, e.source)][:4]
         try:
-            ranked = self.store.search(scope, question, limit=8,
+            ranked = self.store.search(scope, query, limit=8,
                                        provider=self.provider if self.semantic else None)
         except AnalysisError:
             if not self.semantic:
                 raise
             retrieval_warnings.append('Semantic retrieval unavailable; explicitly degraded to lexical retrieval')
-            ranked = self.store.search(scope, question, limit=8)
+            ranked = self.store.search(scope, query, limit=8)
         retrieval = 'hybrid_rrf' if any(hit['method'] == 'hybrid_rrf' for hit in ranked) else 'lexical_bm25'
         reranked = False
         if self.reranker and ranked:
             # Two-stage retrieval: the fused list is cheap and wide, the reranker is precise
             # and narrow. Its failure must degrade, not abort the analysis.
             try:
-                order = self.reranker.rerank(question, [hit['evidence']['text'] for hit in ranked])
+                order = self.reranker.rerank(query, [hit['evidence']['text'] for hit in ranked])
                 ranked = [dict(ranked[index], score=score) for index, score in order]
                 reranked = True
             except AnalysisError as error:
                 retrieval_warnings.append('Rerank unavailable; kept the fused order: ' + str(error))
         if reranked:
             retrieval += '+rerank'
+        candidates += named
         candidates += [dict(hit['evidence'], origin='history') for hit in ranked]
         candidates += [dict(e.json(), origin='current') for e in bundle.evidence]
         for item in candidates:

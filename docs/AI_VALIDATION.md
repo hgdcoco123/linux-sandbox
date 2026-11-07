@@ -287,7 +287,7 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 
 | Agent | 无反馈 | 完整 report | 结构化分析 |
 |---|---|---|---|
-| 规则表 | 0/3 | 0/3 | **2/3** |
+| 规则表 | 0/3 | 0/3 | **3/3** |
 | 真实模型 | 0/3 | 0/3 | **2/3** |
 
 规模：18 条 loop、50 次沙箱执行、10 次分析（10/10 通过校验）。关键点：规则表也能修好 → 进步来自

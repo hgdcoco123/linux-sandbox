@@ -129,6 +129,40 @@ class EvidenceTests(Fixture):
         self.assertNotIn('secret-value', canonical(bundle.json()))
 
 
+class NamedDocumentTests(Fixture):
+    def test_a_file_the_question_names_is_included_before_ranking(self):
+        # A 20-byte spec is the requirement; BM25 will not surface it (its words are not in
+        # the question) and a 16k context budget filled by logs would crowd it out.
+        artifacts = self.root/'artifacts'
+        artifacts.mkdir()
+        (artifacts/'spec.txt').write_text('expected=42\n')
+        (artifacts/'big.log').write_text('irrelevant line of output\n' * 400)
+        bundle = collect('project-a', self.run, artifact_root=artifacts,
+                         context='让 answer.txt 满足 spec.txt 的要求')
+        self.store.put_bundle(bundle)
+        result = Analyzer(self.store, ScriptedProvider([answer])).analyze(
+            'project-a', bundle.run_id, '这次运行为什么没有达到目标？')
+        sources = [item['source'] for item in result['evidence']]
+        self.assertIn('artifact/spec.txt', sources)
+        # ... and before the bulk log, not merely somewhere in a 16k budget.
+        self.assertLess(sources.index('artifact/spec.txt'), sources.index('artifact/big.log'))
+        self.assertIn('expected=42', json.dumps(result['evidence']))
+
+    def test_an_unnamed_file_can_be_crowded_out(self):
+        # The point of naming: without it, the same 20-byte file loses to bulk output.
+        artifacts = self.root/'artifacts'
+        artifacts.mkdir()
+        (artifacts/'spec.txt').write_text('expected=42\n')
+        (artifacts/'big.log').write_text('irrelevant line of output\n' * 2000)
+        bundle = collect('project-a', self.run, artifact_root=artifacts)
+        self.store.put_bundle(bundle)
+        result = Analyzer(self.store, ScriptedProvider([answer])).analyze(
+            'project-a', bundle.run_id, '这次运行为什么失败？')
+        sources = [item['source'] for item in result['evidence']]
+        # Same file, no name in the query: it lands after the bulk output instead of before it.
+        self.assertGreater(sources.index('artifact/spec.txt'), sources.index('artifact/big.log'))
+
+
 class RetrievalTests(Fixture):
     def test_scope_is_enforced(self):
         self.assertEqual(self.store.search('project-b', 'undefined reference'), [])
