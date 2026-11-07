@@ -80,7 +80,7 @@ if [ -z "$release" ]; then
    https://gitee.com/$slug/releases/new?tag_name=v$version
    title: v$version
    body : copy from docs/releases/v$version.md
-   attach: ${asset} and ${asset}.sha256
+   attach: ${asset}, ${asset}.sha256, and the wheel (if present)
 
    or re-run with --token <GITEE_TOKEN> --release v$version to do it through the API.
 EOF
@@ -88,10 +88,22 @@ EOF
 fi
 
 [ -n "$token" ] || fail "--release needs --token (Gitee 私人令牌，勾选 projects 权限)"
-archive="dist/$asset"
-[ -f "$archive" ] || fail "missing $archive (run tools/pack.sh first, or download the published asset)"
-sha="$(dirname "$archive")/$asset.sha256"
-[ -f "$sha" ] || fail "missing $sha"
+
+# The archive is not always in dist/: it may have been fetched into ~/handoff earlier. Look in the
+# obvious places rather than making the user copy files around.
+find_asset() {
+    for dir in "${SBX_ASSET_DIR:-}" dist "$HOME/handoff" "$HOME" ; do
+        [ -n "$dir" ] || continue
+        [ -f "$dir/$asset" ] && { printf '%s\n' "$dir"; return 0; }
+    done
+    return 1
+}
+asset_dir=$(find_asset) || fail "cannot find $asset (run tools/pack.sh, or set SBX_ASSET_DIR=/path)"
+archive="$asset_dir/$asset"
+sha="$asset_dir/$asset.sha256"
+[ -f "$sha" ] || fail "missing $sha next to $archive"
+wheel=$(ls "$asset_dir"/*.whl 2>/dev/null | head -1 || true)
+echo "== assets from $asset_dir: $(basename "$archive")${wheel:+ + $(basename "$wheel")}"
 notes="docs/releases/$release.md"
 body=$( [ -f "$notes" ] && cat "$notes" || echo "release $release" )
 
@@ -116,7 +128,9 @@ created=$(curl -fsS -X POST "$api/releases" -H 'Content-Type: application/json' 
 id=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
 [ -n "$id" ] || fail "no release id in the response: $created"
 
-for file in "$archive" "$sha"; do
+files="$archive $sha"
+[ -n "${wheel:-}" ] && files="$files $wheel"
+for file in $files; do
     echo "== attach $(basename "$file")"
     curl -fsS -X POST "$api/releases/$id/attach_files" \
         -F "access_token=$token" -F "file=@$file" >/dev/null \
