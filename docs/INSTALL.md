@@ -31,11 +31,20 @@ $prefix/share/linux-sandbox/tools/*.py # 委派/运行时辅助脚本
 ## 2.1 或者用预编译包（不用装编译工具链）
 
 ```bash
-bash tools/pack.sh                       # 在你机器上构建一次，产出 dist/linux-sandbox-<ver>-linux-<arch>.tar.gz + .sha256
-tar -xzf linux-sandbox-<ver>-linux-<arch>.tar.gz -C /opt
-/opt/linux-sandbox-<ver>-linux-<arch>/bin/sandbox doctor
-export PATH="/opt/linux-sandbox-<ver>-linux-<arch>/bin:$PATH"
+# 下载（-o 明确文件名；-O 是大写字母 O，写成 -0 会让 curl 输出到终端导致"文件不存在"）
+ver=0.5.1; file="linux-sandbox-${ver}-linux-x86_64.tar.gz"
+curl -fL --retry 3 --retry-delay 2 -o "$file" \
+  "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}"
+test -s "$file" || { echo "download failed"; exit 1; }
+sha256sum -c <(curl -fsSL "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}.sha256")
+
+sudo mkdir -p /opt && sudo tar -xzf "$file" -C /opt
+export PATH="/opt/linux-sandbox-${ver}-linux-x86_64/bin:$PATH"
+sandbox doctor
 ```
+
+连不上 `github.com:443` 时（`SSL_ERROR_SYSCALL` / `Connection reset`）：换机器下载后用 `scp` 传过去并校对
+`.sha256`；或从源码构建（`-DSANDBOX_STATIC_DEPS=ON`）。详见 README 的"下载失败怎么办"。
 
 包内是自洽的：`bin/`（两个二进制 + `sandbox-ai`）、`share/linux-sandbox/`（SDK、辅助脚本、分析层）、
 `docs/`、`LICENSE`。解包即可用，`sandbox-ai` 会按自身位置找到 Python 包。

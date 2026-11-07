@@ -50,9 +50,14 @@ exit:       0 (0 means success)
 ### 预编译包
 
 ```bash
-curl -LO https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.1/linux-sandbox-0.5.1-linux-x86_64.tar.gz
-tar -xzf linux-sandbox-0.5.1-linux-x86_64.tar.gz -C /opt
-export PATH="/opt/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"
+ver=0.5.1
+file="linux-sandbox-${ver}-linux-x86_64.tar.gz"
+curl -fL --retry 3 --retry-delay 2 -o "$file" \
+  "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}"
+test -s "$file" || { echo "download failed; see Troubleshooting below"; exit 1; }
+
+sudo mkdir -p /opt && sudo tar -xzf "$file" -C /opt
+export PATH="/opt/linux-sandbox-${ver}-linux-x86_64/bin:$PATH"
 
 sandbox doctor              # 报告这台机器支持哪种启动模式
 ```
@@ -139,7 +144,43 @@ host
 | [docs/CI.md](docs/CI.md) | 在 CI 中使用，以及托管 runner 上的委派限制 |
 | [docs/RELEASING.md](docs/RELEASING.md)、[docs/PUBLISH.md](docs/PUBLISH.md) | 发布流程 |
 
+## 下载失败怎么办
+
+发布包在 GitHub Releases 上。如果这台机器连不上 `github.com:443`（`curl: (35) SSL_ERROR_SYSCALL`、
+`Connection reset`、超时都是这个原因），按顺序试：
+
+1. **换一种下载方式**（不是网络问题的话，`-o` 明确写文件名比 `-O` 稳）：
+
+   ```bash
+   curl -fL --retry 3 --retry-delay 2 -o linux-sandbox-0.5.1-linux-x86_64.tar.gz \
+     https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.1/linux-sandbox-0.5.1-linux-x86_64.tar.gz
+   ```
+
+   注意是 `-O`（大写字母 O，保存到文件）而不是 `-0`（数字零，会让 curl 输出到终端，什么也不下载）。
+
+2. **在能上网的机器上下载，再传过去**：
+
+   ```bash
+   # 能上网的机器
+   sha256sum linux-sandbox-0.5.1-linux-x86_64.tar.gz
+   scp linux-sandbox-0.5.1-linux-x86_64.tar.gz user@target:/tmp/
+   # 目标机器，校对官方校验和
+   cd /tmp && sha256sum -c linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256
+   ```
+
+3. **从源码构建**（同样需要一个能访问仓库的方式）：
+
+   ```bash
+   git clone https://github.com/hgdcoco123/linux-sandbox.git
+   cd linux-sandbox && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSANDBOX_STATIC_DEPS=ON
+   cmake --build build --parallel && bash tools/install.sh
+   ```
+
+4. 走代理/镜像时，只把 `github.com` 换成可达的镜像地址，**文件路径保持不变**；下载后务必用
+   Release 页上的 `.sha256` 校验一次。
+
 ## 平台与要求
+
 
 | 项 | 要求 |
 |---|---|
