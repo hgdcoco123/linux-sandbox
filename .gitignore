@@ -3,3 +3,9 @@
 /outputs/*.zip
 /.runs/
 __pycache__/
+/dist/
+*.whl
+/sandbox-report.json
+/sandbox-output/
+/sandbox-run.txt
+/sandbox-status.txt

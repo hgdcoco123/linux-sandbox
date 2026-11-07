@@ -127,6 +127,7 @@ Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Lin
 | 预编译包 | `bash tools/pack.sh` → `dist/*.tar.gz` + sha256 | 已验证 |
 | `pip install` | `pip install .`（`.[sdk]` 带 protobuf） | 已验证（wheel 构建 + 安装 + 入口 + demo） |
 | 发布一个版本 | [docs/RELEASING.md](docs/RELEASING.md) | 流程文档 |
+| 发布到 GitHub | [docs/PUBLISH.md](docs/PUBLISH.md) | 检查清单（先绿再打 tag） |
 | 汇报安全问题 | [SECURITY.md](SECURITY.md) | — |
 
 本地示例：`bash examples/local-run.sh`；CI 示例：[examples/github-action.yml](examples/github-action.yml)。

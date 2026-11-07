@@ -43,6 +43,8 @@ jobs:
           import json
           report = json.load(open('sandbox-report.json'))
           assert report['schema_version'] == 2, report['schema_version']
-          assert 'checksums.json' in __import__('os').popen('ls sandbox-report.json').read() or True
+          assert report['run_id'].startswith('run-'), report['run_id']
+          # A diagnostic run has no workspace; an isolated one must carry the field.
+          assert 'workspace' in report or report['isolated'] is False, sorted(report)
           print('report keys:', sorted(report)[:8])
           PY
