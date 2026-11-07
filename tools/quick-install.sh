@@ -129,10 +129,18 @@ say "   smoke run ok (10 = target_failed, the expected verdict for 'exit 3')"
 
 if [ "$apparmor" -eq 1 ]; then
     profile="/etc/apparmor.d/linux-sandbox-launcher"
+    # The attachment globs the version directory on purpose: a profile pinned to 0.5.1 silently
+    # stops matching after an upgrade, and the failure looks like "isolation broke by itself".
+    launcher_glob="$prefix/linux-sandbox-*/bin/sandbox-launcher"
     say "== granting userns to $root/bin/sandbox-launcher"
     printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile linux-sandbox-launcher %s flags=(unconfined) {\n  userns,\n}\n' \
-        "$root/bin/sandbox-launcher" | privileged tee "$profile" >/dev/null
+        "$launcher_glob" | privileged tee "$profile" >/dev/null
     privileged apparmor_parser -r "$profile" || say "   apparmor_parser failed; isolation may stay unavailable"
+    if command -v aa-status >/dev/null 2>&1 && privileged aa-status 2>/dev/null | grep -q linux-sandbox-launcher; then
+        say "   profile loaded (aa-status shows linux-sandbox-launcher)"
+    else
+        say "   could not confirm the profile is loaded; check: sudo aa-status | grep linux-sandbox"
+    fi
 fi
 
 say
