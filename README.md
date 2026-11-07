@@ -20,6 +20,27 @@ run:        run-3f2a...  (inspect with: sandbox inspect run-3f2a...)
 exit:       0 (0 means success)
 ```
 
+## 安装（一条命令，Linux x86_64）
+
+```bash
+base="https://gitee.com/lpzdinghai/linux-sandbox/releases/download/v0.5.3"; name="linux-sandbox-0.5.3-linux-x86_64"
+cd /tmp && curl -fsSL -O "$base/$name.tar.gz" && curl -fsSL -O "$base/$name.tar.gz.sha256" && sha256sum -c "$name.tar.gz.sha256" && mkdir -p ~/.local && tar -xzf "$name.tar.gz" -C ~/.local && ~/.local/$name/install.sh
+```
+
+装到 `~/.local`，不需要 root / git / 编译器；上一条命令会校验 sha256、链接 `sandbox`/`sbx`/`sandbox-ai`、
+跑一次冒烟测试，并告诉你这台机器能不能做隔离。装完新开终端（或 `source ~/.bashrc`）即可：
+
+```console
+$ sbx --version
+sandbox 0.5.3
+$ sbx run --process --quiet --summary -- /bin/sh -c 'echo hi; exit 3'
+verdict:    target_failed (nonzero_exit)
+exit:       10 (0 means success)      # 10 是预期判定，不是错误
+```
+
+GitHub 同理，把 `gitee.com/lpzdinghai/linux-sandbox` 换成 `github.com/hgdcoco123/linux-sandbox` 即可。
+`pip install linux-sandbox` 尚未发布到 PyPI（见 [docs/PUBLISH.md](docs/PUBLISH.md) 6.5）。
+
 ## 与"直接 exec / 套个容器"的区别
 
 沙箱的难点不在于把进程跑起来，而在于**这次运行到底算不算成功**。本项目把这个问题拆成几个可验证的事实：
