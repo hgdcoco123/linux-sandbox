@@ -14,7 +14,7 @@
 namespace {
 void help() {
     std::cout
-        << "Linux Sandbox 0.5\n"
+        << "Linux Sandbox " << SBX_VERSION << "\n"
            "  sandbox run --config FILE [--state-root DIR] [--launcher PATH] [--allow-unsafe]\n"
            "  sandbox run [--timeout MS] [--memory BYTES] [--input DIR] [--output DIR] [--quiet] \\\n"
            "              [--runtime DIR] [--cgroup-root DIR] [--process] [--summary] -- COMMAND...\n"
@@ -194,6 +194,10 @@ int main(int argc, char **argv) {
     try {
         if (argc == 1 || std::string(argv[1]) == "--help") {
             help();
+            return 0;
+        }
+        if (std::string(argv[1]) == "--version") {
+            std::cout << "sandbox " << SBX_VERSION << "\n";
             return 0;
         }
         std::string command = argv[1], id;

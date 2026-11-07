@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linux-sandbox"
+version = "0.5.0"
+description = "Isolated execution with verifiable failure explanations: a Linux sandbox and an evidence-analysis layer"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "hgdcoco123" }]
+keywords = ["sandbox", "isolation", "cgroups", "llm", "evidence", "reproducibility"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# The session/batch SDK speaks protobuf; the analysis layer does not need it.
+sdk = ["protobuf>=3.20"]
+
+[project.urls]
+Documentation = "https://github.com/OWNER/linux-sandbox/blob/master/docs/QUICKSTART.md"
+
+[project.scripts]
+sandbox-ai = "sandbox_ai.cli:main"
+
+[tool.setuptools]
+packages = ["sandbox_ai", "sdk"]

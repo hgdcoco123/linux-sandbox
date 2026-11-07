@@ -39,4 +39,17 @@ print('== ok: stats', json.dumps({k: stats[k] for k in
       ('analyses', 'completed', 'structured_output_rate', 'tool_calls', 'tool_denied')}))
 PY
 
-echo "AI CHECK PASSED: contracts, demo and aggregate metrics"
+echo "== packaging metadata"
+"$python" - <<'PY' || exit 1
+import importlib
+import tomllib
+meta = tomllib.load(open('pyproject.toml', 'rb'))['project']
+assert meta['version'], 'pyproject has no version'
+assert 'LICENSE' in __import__('os').listdir('.'), 'LICENSE is missing (nobody may use the code)'
+module, _, attribute = meta['scripts']['sandbox-ai'].partition(':')
+entry = getattr(importlib.import_module(module), attribute)
+assert callable(entry), 'the sandbox-ai entry point is not callable'
+print('== ok: packaging', meta['name'], meta['version'], 'entry', meta['scripts']['sandbox-ai'])
+PY
+
+echo "AI CHECK PASSED: contracts, demo, aggregate metrics and packaging"

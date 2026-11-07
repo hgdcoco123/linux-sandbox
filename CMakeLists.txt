@@ -113,6 +113,8 @@ target_compile_options(sandbox_runtime PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(sandbox_runtime PUBLIC sandbox_model sandbox_metrics sandbox_writer sandbox_core
   Threads::Threads ${SECCOMP_LIBRARY} protobuf::libprotobuf)
 add_executable(sandbox apps/cli/main.cpp)
+# The version comes from project() so the CLI and any package metadata cannot drift apart.
+target_compile_definitions(sandbox PRIVATE SBX_VERSION="${PROJECT_VERSION}")
 target_link_libraries(sandbox PRIVATE sandbox_runtime)
 add_executable(sandbox-launcher apps/launcher/main.cpp)
 target_link_libraries(sandbox-launcher PRIVATE sandbox_runtime)

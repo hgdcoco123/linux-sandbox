@@ -116,6 +116,20 @@ json 3.11.3 与 spdlog 1.14.1 已随源码提供。libseccomp 和 Protobuf C++ �
 
 Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Linux 运行时。
 
+## 5 分钟上手
+
+不想读长文档就直接看 [docs/QUICKSTART.md](docs/QUICKSTART.md)：装、跑一段不可信代码、让程序解释它的失败。
+许可证是 MIT（[LICENSE](LICENSE)），`sandbox --version` 报出版本，变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+```bash
+cmake -S . -B build && cmake --build build --parallel && bash tools/install.sh
+sandbox doctor
+sandbox run --process --quiet --summary -- /bin/sh -c 'exit 3'   # 诊断后端：没有隔离
+```
+
+分析层也可以当普通 Python 包安装：`pip install .`（纯 Python、零依赖；`pip install ".[sdk]"` 额外装
+会话 SDK 需要的 protobuf），装完有 `sandbox-ai` 命令。
+
 ## 先运行诊断后端，理解执行架构
 
 ```bash
