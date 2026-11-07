@@ -152,6 +152,20 @@ EOF
 sudo apparmor_parser -r /etc/apparmor.d/linux-sandbox-launcher
 ```
 
+**已验证（Ubuntu 24.04，0.5.2 安装包，2026-11）**：写入上面的 profile 并
+`apparmor_parser -r` 后，`kernel.apparmor_restrict_unprivileged_userns` **仍然是 1**，
+`sandbox doctor` 报：
+
+```
+"apparmor_context": "linux-sandbox-launcher (unconfined)"   ← 探针子进程受这个 profile 管理
+"available": true
+"stage": "completed"
+```
+
+也就是说不需要全局放宽，只放行这一个 launcher 就够了。此时 `aa-status` 里能看到
+`linux-sandbox-launcher` 已加载；**升级版本目录不影响匹配**（profile 里用的是
+`linux-sandbox-*`）。
+
 改完重新跑 `sandbox doctor`，`available` 应为 `true`。**这两条都需要 root，且属于宿主策略变更**；
 `doctor` 的 `host_policy_modified` 字段始终是 `false`，表示工具自己不会去改任何系统设置。
 

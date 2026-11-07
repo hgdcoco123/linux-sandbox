@@ -206,7 +206,7 @@ sandbox --version
 | 系统 | Linux，cgroup v2；内核支持 user namespace |
 | 权限 | 不需要 root；需要 user systemd 委派，或一个可写的 cgroup 子树 |
 | 无以上条件 | 只能使用 `--process` 诊断后端（**不是安全边界**，报告里 `isolated=false`） |
-| 已验证平台 | Ubuntu 24.04 x86_64 |
+| 已验证平台 | Ubuntu 24.04 x86_64（含 `apparmor_restrict_unprivileged_userns=1` 下用 AppArmor profile 只放行本 launcher 的隔离执行） |
 
 ## 状态
 
