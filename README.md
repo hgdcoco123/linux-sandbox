@@ -7,7 +7,10 @@
 Linux 上的不可信程序执行底座：**调用者拿到的不只是退出码，而是一份可核验的判定与产物清单**；
 在它之上还有一个分析层，把一次失败的运行翻译成"发生了什么、缺什么、下一步"，并且每条结论都能指回某一行证据。
 
-```console
+``
+> --cgroup-root 必须指向一个已委派的 cgroup v2 子树；获取方式见 [docs/INSTALL.md](docs/INSTALL.md)，sandbox doctor 会告诉你这台机器支持哪种启动模式。
+
+`console
 $ sandbox run --runtime ./runtime --cgroup-root ./runs --output ./out --summary -- /bin/hello
 verdict:    ok (success)
 exit code:  0
