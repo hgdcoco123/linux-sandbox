@@ -106,4 +106,7 @@ Json SandboxService::cancel(const std::string &id) const {
 Json SandboxService::cleanup() const {
     return RunStore::cleanup(state_root_);
 }
+Json SandboxService::prune(std::size_t keep, std::uint64_t older_ms, bool dry_run) {
+    return RunStore::prune(state_root_, keep, older_ms, dry_run);
+}
 } // namespace sandbox

@@ -75,6 +75,22 @@ with tempfile.TemporaryDirectory(prefix="sbxt-") as temp:
     require(report["stdout"]["saved_bytes"] == 1024 and report["stdout"]["discarded_bytes"] == 198976, report)
     orphan = "import os,time,signal; p=os.fork(); (os.setsid(),signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(20)) if p==0 else None"
     run([sys.executable, "-c", orphan])
+    # prune removes finished runs; the dry run must not, and the newest are kept.
+    prune_state = root / "prune-state"
+    for _ in range(3):
+        subprocess.run([BIN, "run", "--process", "--quiet", "--state-root", str(prune_state),
+                        "--", "/bin/true"], capture_output=True)
+    listed = json.loads(subprocess.run([BIN, "prune", "--keep", "1", "--dry-run",
+                                        "--state-root", str(prune_state)],
+                                       capture_output=True, text=True).stdout)
+    require(listed["finished"] == 3 and listed["kept"] == 1, listed)
+    require([item["status"] for item in listed["results"]] == ["would_remove", "would_remove"], listed)
+    require(len(list(prune_state.glob("run-*"))) == 3, "the dry run must not delete anything")
+    applied = json.loads(subprocess.run([BIN, "prune", "--keep", "1", "--state-root", str(prune_state)],
+                                       capture_output=True, text=True).stdout)
+    require([item["status"] for item in applied["results"]] == ["removed", "removed"], applied)
+    require(len(list(prune_state.glob("run-*"))) == 1, "keep 1 leaves exactly one run")
+
     sample = root / "sample.bin"
     sample.write_bytes(b"data\0bytes")
     report, directory = run(["/bin/cat"], stdin_file=str(sample))

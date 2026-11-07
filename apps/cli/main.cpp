@@ -36,6 +36,61 @@ void help() {
            "--quiet hides the live log on stderr; internal.log keeps it either way.\n"
            "--summary prints the result as six human lines instead of the full report.\n";
 }
+void command_help(const std::string &command) {
+    const std::map<std::string, std::string> text{
+        {"run", "sandbox run --config FILE | -- [options] -- COMMAND...\n"
+                "  Runs one command and prints the report (or six human lines with --summary).\n"
+                "  Quick form flags: --timeout MS, --memory BYTES[K|M|G], --input DIR, --output DIR,\n"
+                "  --runtime DIR, --cgroup-root DIR, --process, --quiet, --summary.\n"
+                "  Example: sandbox run --process --summary -- /bin/sh -c 'exit 3'"},
+        {"validate", "sandbox validate --config FILE\n"
+                     "  Parses and validates a config without running anything.\n"
+                     "  Example: sandbox validate --config profiles/process-demo.json --allow-unsafe"},
+        {"doctor", "sandbox doctor [--cgroup-root DIR]\n"
+                   "  Reports which startup modes work here and where isolation fails."},
+        {"inspect", "sandbox inspect RUN_ID\n  Prints the stored state and report of one run."},
+        {"cancel", "sandbox cancel RUN_ID\n  Asks a running supervisor to stop; the run still reports."},
+        {"cleanup", "sandbox cleanup\n"
+                    "  Recovers resources of interrupted runs (cgroup, sockets, sessions).\n"
+                    "  It never deletes a run directory - use prune for that."},
+        {"prune", "sandbox prune [--keep N] [--older-than 7d] [--dry-run]\n"
+                  "  Deletes finished run directories. The newest N are kept; --older-than also\n"
+                  "  requires age (units: m/h/d). Running or unfinished runs are never removed.\n"
+                  "  Example: sandbox prune --keep 20 --older-than 7d --dry-run"},
+        {"batch", "sandbox batch --config FILE\n  Runs the tasks of a batch config (see profiles/)."},
+        {"session-open", "sandbox session-open --config FILE\n"
+                         "  Starts a persistent session and prints its run id and control socket."},
+        {"session-request", "sandbox session-request RUN_ID --request FILE\n"
+                            "  Sends one control request (run a command, status, cancel, close)."},
+        {"files", "sandbox files --request FILE\n"
+                  "  Snapshot, manifest or export a directory through the descriptor-based copier."},
+    };
+    const auto found = text.find(command);
+    if (found == text.end()) {
+        help();
+        return;
+    }
+    std::cout << found->second << "\n";
+}
+
+std::uint64_t duration_ms(const std::string &text) {
+    if (text.size() < 2)
+        throw std::runtime_error("--older-than needs a number and a unit (m/h/d), e.g. 7d");
+    const char unit = text.back();
+    const std::uint64_t scale = unit == 'm' ? 60 * 1000ULL : unit == 'h' ? 60 * 60 * 1000ULL : unit == 'd' ? 24 * 60 * 60 * 1000ULL : 0;
+    if (!scale)
+        throw std::runtime_error("--older-than needs a number and a unit (m/h/d), e.g. 7d");
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i + 1 < text.size(); ++i) {
+        if (text[i] < '0' || text[i] > '9')
+            throw std::runtime_error("--older-than needs a number and a unit (m/h/d), e.g. 7d");
+        if (value > (UINT64_MAX / scale - 9) / 10)
+            throw std::runtime_error("--older-than is out of range");
+        value = value * 10 + static_cast<std::uint64_t>(text[i] - '0');
+    }
+    return value * scale;
+}
+
 std::uint64_t bytes(const std::string &text) {
     std::size_t end = text.size();
     std::uint64_t scale = 1;
@@ -145,6 +200,7 @@ int main(int argc, char **argv) {
         std::map<std::string, std::string> options;
         std::vector<std::string> passthrough;
         bool unsafe = false, process_mode = false, summary = false, quiet = false;
+        bool want_help = false, dry_run = false;
         for (int i = 2; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--") {
@@ -153,8 +209,12 @@ int main(int argc, char **argv) {
                 break;
             }
             if (arg == "--help") {
-                help();
-                return 0;
+                want_help = true;
+                continue;
+            }
+            if (arg == "--dry-run") {
+                dry_run = true;
+                continue;
             }
             if (arg == "--allow-unsafe") {
                 if (unsafe)
@@ -183,7 +243,8 @@ int main(int argc, char **argv) {
             }
             if (arg != "--config" && arg != "--state-root" && arg != "--launcher" &&
                 arg != "--cgroup-root" && arg != "--request" && arg != "--timeout" &&
-                arg != "--memory" && arg != "--input" && arg != "--output" && arg != "--runtime")
+                arg != "--memory" && arg != "--input" && arg != "--output" && arg != "--runtime" &&
+                arg != "--keep" && arg != "--older-than")
                 throw std::runtime_error("unknown option " + arg);
             if (i + 1 == argc || options.contains(arg))
                 throw std::runtime_error("missing/duplicate option " + arg);
@@ -191,9 +252,18 @@ int main(int argc, char **argv) {
         }
         const std::set<std::string> commands{
             "run",     "validate",     "doctor",          "inspect", "cancel",
-            "cleanup", "session-open", "session-request", "files",   "batch"};
+            "cleanup", "session-open", "session-request", "files",   "batch",
+            "prune",   "help"};
         if (!commands.contains(command))
             throw std::runtime_error("unknown command");
+        if (command == "help") {
+            command_help(id);
+            return 0;
+        }
+        if (want_help) {
+            command_help(command);
+            return 0;
+        }
         bool needs_id = command == "inspect" || command == "cancel" || command == "session-request";
         if (needs_id != !id.empty())
             throw std::runtime_error("unexpected or missing run ID");
@@ -270,6 +340,18 @@ int main(int argc, char **argv) {
             output = app.doctor(options.contains("--cgroup-root")
                                     ? sandbox::fs::path(options["--cgroup-root"])
                                     : sandbox::fs::path{});
+        else if (command == "prune") {
+            std::size_t keep = 0;
+            if (options.contains("--keep")) {
+                try {
+                    keep = static_cast<std::size_t>(std::stoull(options.at("--keep")));
+                } catch (const std::exception &) {
+                    throw std::runtime_error("--keep needs a nonnegative integer");
+                }
+            }
+            const auto older = options.contains("--older-than") ? duration_ms(options.at("--older-than")) : 0ULL;
+            output = app.prune(keep, older, dry_run);
+        }
         else if (command == "inspect")
             output = app.inspect(id);
         else if (command == "cancel")

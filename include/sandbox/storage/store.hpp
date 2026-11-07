@@ -31,6 +31,10 @@ class RunStore {
     void checksums();
     static Json inspect(const fs::path &root, const std::string &id);
     static Json cleanup(const fs::path &root);
+    // Remove finished run directories: keep the newest `keep`, and only those older than
+    // `older_ms` when it is non-zero. Locked (running) or unfinished runs are never removed.
+    static Json prune(const fs::path &root, std::size_t keep, std::uint64_t older_ms,
+                      bool dry_run);
     static fs::path verified_run(const fs::path &root, const std::string &id);
 
   private:

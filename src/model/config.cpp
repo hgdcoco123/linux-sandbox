@@ -4,6 +4,25 @@
 #include <set>
 #include <stdexcept>
 namespace sandbox {
+namespace {
+// A typo in a field name is a frustrating dead end: the validator knows every legal name,
+// so it can name the one the caller probably meant.
+std::string closest_key(const std::string &given, const std::set<std::string> &keys) {
+    std::size_t best = 3; // only suggest something within two edits
+    std::string pick;
+    for (const auto &key : keys) {
+        std::size_t shared = 0;
+        while (shared < given.size() && shared < key.size() && given[shared] == key[shared])
+            ++shared;
+        const std::size_t distance = given.size() + key.size() - 2 * shared;
+        if (distance < best) {
+            best = distance;
+            pick = key;
+        }
+    }
+    return best <= 2 ? pick : std::string();
+}
+} // namespace
 void require_keys(const Json &j, std::initializer_list<const char *> allowed,
                   const std::string &where) {
     if (!j.is_object())
@@ -11,9 +30,14 @@ void require_keys(const Json &j, std::initializer_list<const char *> allowed,
     std::set<std::string> keys;
     for (auto k : allowed)
         keys.emplace(k);
-    for (auto it = j.begin(); it != j.end(); ++it)
-        if (!keys.contains(it.key()))
-            throw std::runtime_error(where + ": unknown field " + it.key());
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (keys.contains(it.key()))
+            continue;
+        const auto suggestion = closest_key(it.key(), keys);
+        throw std::runtime_error(where + ": unknown field " + it.key() +
+                                 (suggestion.empty() ? std::string()
+                                                     : " (did you mean '" + suggestion + "')?"));
+    }
 }
 namespace {
 std::uint64_t numeric(const Json &j, const char *key, std::uint64_t def, std::uint64_t max) {

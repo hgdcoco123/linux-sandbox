@@ -4,7 +4,10 @@
 #include "sandbox/runtime/session_wire.hpp"
 #include "sandbox/storage/sha256.hpp"
 #include "sandbox/storage/store.hpp"
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <vector>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -179,6 +182,70 @@ Json RunStore::inspect(const fs::path &root, const std::string &id) {
     j["active"] = active;
     return j;
 }
+Json RunStore::prune(const fs::path &root, std::size_t keep, std::uint64_t older_ms,
+                     bool dry_run) {
+    secure_dir(root);
+    struct Finished {
+        std::string id;
+        fs::path path;
+        fs::file_time_type when;
+    };
+    std::vector<Finished> finished;
+    for (const auto &entry : fs::directory_iterator(root)) {
+        const auto id = entry.path().filename().string();
+        if (id.rfind("run-", 0) != 0)
+            continue;
+        std::error_code failure;
+        const auto when = fs::last_write_time(entry.path() / "result.json", failure);
+        if (failure)
+            continue; // no report: an unfinished run is not ours to delete
+        finished.push_back({id, entry.path(), when});
+    }
+    // Newest first: `keep` counts from the most recent run.
+    std::sort(finished.begin(), finished.end(),
+              [](const Finished &a, const Finished &b) { return a.when > b.when; });
+    const auto now = fs::file_time_type::clock::now();
+    Json results = Json::array();
+    for (std::size_t i = keep; i < finished.size(); ++i) {
+        const auto &run = finished[i];
+        if (older_ms) {
+            const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - run.when);
+            if (age.count() < 0 || static_cast<std::uint64_t>(age.count()) < older_ms)
+                continue;
+        }
+        try {
+            auto lock = open_path(run.path / "lock", O_RDWR);
+            if (::flock(lock.get(), LOCK_EX | LOCK_NB) < 0) {
+                results.push_back({{"run_id", run.id}, {"status", "active"}});
+                continue;
+            }
+            // The same identity check cleanup uses: never remove a directory that is not this
+            // user's run, whatever its name says.
+            auto owner = Json::parse(read_file(run.path / "owner.json"));
+            if (owner.at("schema_version") != 1 || owner.at("run_id") != run.id ||
+                owner.at("uid").get<unsigned>() != ::getuid())
+                throw std::runtime_error("owner mismatch");
+            if (dry_run) {
+                results.push_back({{"run_id", run.id}, {"status", "would_remove"}});
+                continue;
+            }
+            std::error_code removed;
+            fs::remove_all(run.path, removed);
+            if (removed)
+                throw std::runtime_error(removed.message());
+            results.push_back({{"run_id", run.id}, {"status", "removed"}});
+        } catch (const std::exception &failure) {
+            results.push_back({{"run_id", run.id}, {"status", "skipped"}, {"error", failure.what()}});
+        }
+    }
+    return Json{{"schema_version", 1},
+                {"kept", std::min(keep, finished.size())},
+                {"finished", finished.size()},
+                {"older_than_ms", older_ms},
+                {"dry_run", dry_run},
+                {"results", results}};
+}
+
 Json RunStore::cleanup(const fs::path &root) {
     secure_dir(root);
     Json results = Json::array();

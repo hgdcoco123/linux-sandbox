@@ -109,6 +109,18 @@ sandbox-ai --provider demo --db ~/.local/state/analysis.db --scope demo \
 `--provider demo` 不需要任何凭据（回答是模板化的，用来验证链路）；接真实模型时用
 `--provider compatible --base-url ... --model ...`，凭据从 `SANDBOX_AI_API_KEY` 读取。
 
+## 5.3 运行目录会增长，怎么安全清理
+
+每次运行在状态目录下留一个 `run-*` 目录（报告、输出、日志、`checksums.json`）。两步走：
+
+| 命令 | 作用 | 会不会删目录 |
+|---|---|---|
+| `sandbox cleanup` | 回收被中断运行的资源（cgroup、会话、残留套接字），写 `recovery.json` | **不会** |
+| `sandbox prune --keep 20 --older-than 7d [--dry-run]` | 删掉**已完成、已解锁、属于本用户**的运行目录；最新的 N 个保留，`--older-than` 再按时间过滤（单位 m/h/d） | 会 |
+
+先 `--dry-run` 看清单（`would_remove` / `active` / `skipped`）。没有 `result.json` 的未完成运行、
+被锁住的正在运行的目录、owner 不一致的目录**永远不会被删**。
+
 ## 6. 装完能做什么、不能做什么
 
 - 能：单机跑不可信程序、拿结构化报告与产物、跑 Python SDK / 会话 / 批处理、用 `sandbox-ai` 解释失败。

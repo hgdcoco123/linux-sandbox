@@ -11,6 +11,7 @@ class SandboxService {
     Json inspect(const std::string &id) const;
     Json cancel(const std::string &id) const;
     Json cleanup() const;
+    Json prune(std::size_t keep, std::uint64_t older_ms, bool dry_run);
 
   private:
     fs::path state_root_, launcher_;

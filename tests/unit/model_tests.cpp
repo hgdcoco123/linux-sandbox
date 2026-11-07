@@ -68,6 +68,16 @@ int main(int argc, char **argv) {
         auto unknown = j;
         unknown["typo"] = 1;
         rejects([&] { RunConfig::parse(unknown, "."); });
+        // A near miss names the field it probably meant, instead of only rejecting the typo.
+        auto near = j;
+        near["limit"] = Json::object();
+        bool suggested = false;
+        try {
+            RunConfig::parse(near, ".");
+        } catch (const std::exception &error) {
+            suggested = std::string(error.what()).find("did you mean 'limits'") != std::string::npos;
+        }
+        require(suggested, "an unknown field suggests the closest legal name");
         auto negative = j;
         negative["limits"] = {{"wall_ms", -1}};
         rejects([&] { RunConfig::parse(negative, "."); });
