@@ -121,7 +121,7 @@
 | 3 | `src/storage/artifacts.cpp` | 458 | **原子发布**：`RENAME_EXCHANGE`、跨文件系统 copy、manifest |
 | 4 | `include/sandbox/storage/sha256.hpp` | 89 | 校验和（含 `O_NOFOLLOW`） |
 | 5 | `include/sandbox/storage/store.hpp` + `src/storage/run_store.cpp` | 70 + 457 | 状态目录布局、`write_checksums`、`prune`、`cleanup` |
-| 6 | `src/resources/metrics.cpp` + `include/.../metrics.hpp` | 263 + 51 | 指标口径（哪些数字值得信） |
+| 6 | `src/resources/metrics.cpp` + `include/sandbox/resources/metrics.hpp` | 263 + 51 | 指标口径（哪些数字值得信） |
 | 7 | `src/core/record_json.cpp` | 249 | 持久化记录编码（v3 与兼容） |
 
 ---
