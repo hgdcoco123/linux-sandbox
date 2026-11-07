@@ -89,6 +89,13 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
         awaited = session.execute(["/bin/sh", "-c", "printf stable > value; printf oops >&2"])
         awaited.wait(5)
         command_dir = session.directory / awaited.command_id
+        # result.json is written first and checksums.json right after it, from the same finish
+        # path: a reader that looks the instant wait() returns can be a millisecond early, just
+        # like a real consumer would be. Wait briefly instead of assuming both are atomic.
+        deadline = time.monotonic() + 2
+        while not (command_dir / "checksums.json").exists():
+            assert time.monotonic() < deadline, "checksums.json never appeared for " + command_dir.name
+            time.sleep(0.02)
         recorded = json.loads((command_dir / "checksums.json").read_text())
         assert recorded["algorithm"] == "sha256"
         assert recorded["run_id"] == awaited.command_id

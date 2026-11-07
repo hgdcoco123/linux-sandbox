@@ -116,6 +116,22 @@ json 3.11.3 与 spdlog 1.14.1 已随源码提供。libseccomp 和 Protobuf C++ �
 
 Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Linux 运行时。
 
+## 采用入口
+
+| 你想做什么 | 从哪开始 | 状态 |
+|---|---|---|
+| 5 分钟跑一次 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | 已验证 |
+| 跑自己的程序 | [docs/RUNTIME.md](docs/RUNTIME.md) | 已验证 |
+| 在 CI 里用 | [docs/CI.md](docs/CI.md) + 根目录 `action.yml` | 机制已在真机验证；GitHub runner 上待跑一次 |
+| 容器 / 无 systemd | [docs/INSTALL.md](docs/INSTALL.md) 第 3.1 节 + `tools/cgroup_setup.py` | 失败诊断已验证；容器路径待别人跑一次 |
+| 预编译包 | `bash tools/pack.sh` → `dist/*.tar.gz` + sha256 | 已验证 |
+| `pip install` | `pip install .`（`.[sdk]` 带 protobuf） | 元数据/入口点已验证；wheel 待跑 |
+| 发布一个版本 | [docs/RELEASING.md](docs/RELEASING.md) | 流程文档 |
+| 汇报安全问题 | [SECURITY.md](SECURITY.md) | — |
+
+本地示例：`bash examples/local-run.sh`；CI 示例：[examples/github-action.yml](examples/github-action.yml)。
+需要在别的机器上跑的两项验证写在 [docs/VERIFY_ELSEWHERE.md](docs/VERIFY_ELSEWHERE.md)。
+
 ## 在 CI 里用
 
 仓库根目录有 `action.yml`：composite action 在 runner 的 systemd 委派单元里跑一次隔离执行，按 `verdict` 决定这一步成败，并把报告写进 job summary。用法与前置条件见 [docs/CI.md](docs/CI.md)。

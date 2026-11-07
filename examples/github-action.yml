@@ -1,0 +1,43 @@
+# Run one untrusted command in isolated mode and fail the job when it did not succeed.
+#
+# Copy this file into .github/workflows/ of a repository that contains this action at the
+# root (or point `uses:` at owner/repo@v1 once a release tag exists).
+name: sandbox smoke
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run inside the sandbox
+        id: sandbox
+        uses: ./
+        with:
+          command: /usr/bin/sandbox-fixture files
+          output: sandbox-output
+          timeout-ms: '3000'
+          explain: 'true'
+
+      - name: Show what actually came back
+        if: always()
+        run: |
+          echo "verdict=${{ steps.sandbox.outputs.verdict }}"
+          echo "run-id=${{ steps.sandbox.outputs.run-id }}"
+          echo "artifacts-ok=${{ steps.sandbox.outputs.artifacts-ok }}"
+          echo "--- artifacts ---"
+          ls -l sandbox-output || true
+          echo "--- report (first 40 lines) ---"
+          head -40 sandbox-report.json || true
+
+      - name: Upload the report as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-report
+          path: |
+            sandbox-report.json
+            sandbox-run.txt
+            sandbox-output/

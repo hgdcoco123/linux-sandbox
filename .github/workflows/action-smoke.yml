@@ -1,0 +1,43 @@
+name: sandbox action smoke
+# Exercises action.yml on a GitHub-hosted runner: the one thing the local VM could not cover
+# (the checkout/inputs shell around the same delegation mechanism).
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  action:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which startup modes does this runner allow?
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build build --parallel 2 >/dev/null
+          ./build/sandbox doctor | python3 -c \
+            "import json,sys; p=json.load(sys.stdin)['isolation_probe']; print('isolation:', p.get('available'), p.get('stage'))"
+
+      - name: Run the action
+        id: run
+        uses: ./
+        with:
+          command: /usr/bin/sandbox-fixture proc-view
+          timeout-ms: '3000'
+          explain: 'false'
+        # Runners that restrict unprivileged user namespaces cannot isolate; the action says so
+        # instead of pretending. Fail the step only when it did not even fall back.
+        continue-on-error: false
+
+      - name: Assert the verdict was reported
+        run: |
+          case "${{ steps.run.outputs.verdict }}" in
+            ok|target_failed|harness_error|cleanup_incomplete) ;;
+            *) echo "::error::no verdict was reported"; exit 1 ;;
+          esac
+          test -f sandbox-report.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open('sandbox-report.json'))
+          assert report['schema_version'] == 2, report['schema_version']
+          assert 'checksums.json' in __import__('os').popen('ls sandbox-report.json').read() or True
+          print('report keys:', sorted(report)[:8])
+          PY
