@@ -30,14 +30,31 @@ bash tools/pack.sh
 
 包内自带 `bin/`、`share/linux-sandbox/`（SDK、辅助脚本、分析层）、`docs/`、`LICENSE`、`CHANGELOG.md`。
 
-## 4. 打标签并上传
+## 4. 打标签并发布
+
+发布由 `.github/workflows/release.yml` 完成：tag push 触发，runner 构建同一个 tarball、跑 `ctest`、
+用仓库自带的 `GITHUB_TOKEN` 建 Release 并上传附件。**不需要任何人的本地 `gh` 登录。**
 
 ```bash
-git tag -a vx.y.z -m "x.y.z"
-git push origin vx.y.z
+# 正文写在这里，workflow 会用它（找不到就退回 CHANGELOG.md）
+$EDITOR docs/releases/vx.y.z.md
 
+git tag -a vx.y.z -m "x.y.z"
+git push origin vx.y.z      # 触发 release.yml
+```
+
+然后到 Actions 里看 `release` 这个 run，它结束时会打印 `gh release view` 的输出（正文 + 资产列表）。
+手动重发一次（tag 已存在时）：
+
+```bash
+gh workflow run release.yml -f tag=vx.y.z
+```
+
+如果确实要在本地发（有 `gh` 且已登录），等价命令：
+
+```bash
 gh release create vx.y.z dist/*.tar.gz dist/*.sha256 \
-  --title "x.y.z" --notes-file <(sed -n '/^## x.y.z/,/^## /p' CHANGELOG.md)
+  --title "x.y.z" --notes-file docs/releases/vx.y.z.md --verify-tag
 ```
 
 Release notes 里请保留"已验证 / 未验证"两段：这个项目对外最有价值的不是功能列表，而是知道哪些结论

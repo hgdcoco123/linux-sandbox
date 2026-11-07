@@ -1,0 +1,61 @@
+name: release
+
+# Cutting a release should not depend on anyone's local `gh` login: the tag push triggers this,
+# the runner builds the same tarball a user would get, and the release is created with the repo
+# token. The release body comes from docs/releases/<tag>.md when it exists.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev protobuf-compiler libprotobuf-dev python3-protobuf
+
+      - name: Build and test the tag that will ship
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
+      - name: Pack the tarball
+        run: bash tools/pack.sh
+
+      - name: Work out the tag and the notes file
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          notes="docs/releases/${tag}.md"
+          if [ ! -f "${notes}" ]; then
+            echo "::warning::${notes} is missing; falling back to CHANGELOG.md"
+            notes="CHANGELOG.md"
+          fi
+          echo "TAG=${tag}" >> "$GITHUB_ENV"
+          echo "NOTES=${notes}" >> "$GITHUB_ENV"
+          ls -l dist/
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --verify-tag keeps this honest: a release is never created for a tag that does not
+          # exist. If the release is already there (a retried run), uploads are replaced.
+          gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 \
+            --title "${TAG}" --notes-file "${NOTES}" --verify-tag \
+            || gh release upload "${TAG}" dist/*.tar.gz dist/*.sha256 --clobber
+          gh release view "${TAG}"
