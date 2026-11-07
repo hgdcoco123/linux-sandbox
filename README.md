@@ -129,7 +129,7 @@ host
 | 文档 | 内容 |
 |---|---|
 | [docs/USAGE.md](docs/USAGE.md) | 使用手册：参数、读结果、常见任务、故障排查、退出码 |
-| [docs/QUICKSTART.md](docs/QUICKSTART.md) | 5 分钟跑通一次执行与解释 |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | 10 分钟试一遍：两条路线（无权限 / 真隔离）+ 逐条期望输出 |
 | [docs/INSTALL.md](docs/INSTALL.md) | 安装、三种启动模式、无 systemd 环境、退出码 |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | 如何为目标程序准备 runtime（根文件系统） |
 | [docs/CONTRACT.md](docs/CONTRACT.md) | 报告字段分级（稳定 / 实验 / 诊断）与语义承诺 |

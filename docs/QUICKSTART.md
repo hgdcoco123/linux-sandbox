@@ -1,106 +1,146 @@
-# 5 分钟上手
+# 试一遍（10 分钟）
 
-只做一件事：**跑一段不可信代码，然后让程序告诉你它为什么没成功、下一步该看什么。**
+只做一件事：**跑一段程序，拿到判定与产物；再让分析层告诉你这次为什么没成功、下一步看什么。**
 
-## 0. 准备（一次）
+两条路，先看第 2 步的结果再选：
 
-```bash
-git clone <this-repo> && cd <this-repo>
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel
-bash tools/install.sh            # 装到 ~/.local（二进制 + SDK + sandbox-ai）
-export PATH="$HOME/.local/bin:$PATH"
-```
+| 路线 | 需要什么 | 能验证到什么 |
+|---|---|---|
+| **A. 诊断后端** | 只要能编译 | 判定语义、报告、校验和、分析层（**没有隔离**） |
+| **B. 隔离执行** | 一个已委派的 cgroup 子树 | 上面全部 + 真隔离、文件边界、产物原子交付 |
 
-没有 systemd 用户会话、或不允许非特权 user namespace？**先跳到第 3 节的"只看结果"路径**，
-那不需要隔离也能验证整条链路。
-
-### 只要分析层？用 pip 装（不需要编译 C++）
+## 1. 取代码并构建
 
 ```bash
-python3 -m venv /tmp/v && . /tmp/v/bin/activate     # Ubuntu 24.04 有 PEP 668，venv 最省事
-pip install .                 # 或 pip install ".[sdk]" 连带装会话 SDK 需要的 protobuf
-sandbox-ai --help
-sandbox-ai --provider demo --db /tmp/a.db --scope demo demo --output /tmp/demo-out
+git clone https://github.com/hgdcoco123/linux-sandbox.git
+cd linux-sandbox
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-这样装出来的 `sandbox-ai` 可以分析**任何**一份从 Linux 拷来的运行目录——包括在别的机器、CI 或容器里跑出来的。
+依赖：C++20 编译器、CMake ≥ 3.21、`libseccomp-dev`、protobuf。
 
-## 1. 看这台机器能跑哪种模式
+## 2. 看这台机器能跑哪种
+
+```console
+$ ./build/sandbox doctor
+```
+
+关心 `isolation_probe`：
+
+```
+"available": true,  "stage": "ready"                      → 走路线 B
+"available": false, "stage": "make_mounts_private",
+                    "error": "Permission denied"           → 只能走路线 A
+```
+
+`state_root` 是运行目录的位置（默认 `/tmp/sbx-<uid>`），后面会用到。
+
+## 3A. 路线 A：两分钟看到全部机制
+
+```console
+$ ./build/sandbox run --process --quiet --summary -- /bin/sh -c 'echo hello; exit 3'
+verdict:    target_failed (nonzero_exit)
+exit code:  3
+output:     stdout 6 bytes, stderr 0 bytes
+time:       53 ms total (13 startup, 22 execution)
+run:        run-a3ab9ba8df4775cd65f6459a  (inspect with: sandbox inspect run-a3ab9ba8df4775cd65f6459a)
+exit:       10 (0 means success)
+```
+
+两行要分清：`verdict` 是"这次算不算成功"，`exit:` 是沙箱自己的进程退出码。
+
+**取报告**（JSON，完整事实）：
 
 ```bash
-sandbox doctor
+./build/sandbox inspect run-a3ab9ba8df4775cd65f6459a
 ```
 
-看 `isolation_probe`：`available: true` 才能做隔离；否则它会告诉你卡在哪一步
-（`userns` / `cgroup` / `make_mounts_private`）。这一步不是可选的，它决定后面用哪种方式跑。
+**让分析层解释**（不需要 API 凭据，用 `demo` 提供方确认链路）：
 
-## 2. 跑一段不可信代码并拿回结果
+```console
+$ PYTHONPATH=. python3 -m sandbox_ai --provider demo --db /tmp/a.db --scope demo \
+      explain --run-dir /tmp/sbx-$(id -u)/run-a3ab9ba8df4775cd65f6459a
+run: run-a3ab9ba8df4775cd65f6459a
+execution: nonzero_exit, verdict target_failed, exit 3
+status: completed
+
+[已确认] 执行报告包含以下记录。
+    ev-218bca01de94c918a36b5ee1 L2: "cleanup": {
+...
+```
+
+`ev-…` 是证据编号，`L2` 是行号——**每条结论都能指回原文某一行**，这是分析层的核心设计。
+
+## 4B. 路线 B：真隔离执行
+
+前提：第 2 步 `available: true`。
 
 ```bash
-mkdir -p /tmp/demo-out
-sandbox run \
-  --runtime /path/to/runtime --cgroup-root "$SANDBOX_CGROUP_ROOT" \
-  --input /tmp/demo-in --output /tmp/demo-out \
-  --timeout 2000 --memory 256M \
-  --summary -- /usr/bin/sandbox-fixture files
+# 1) 一个可用的 cgroup 子树
+runs=$(python3 tools/cgroup_setup.py)
+
+# 2) 目标程序的根文件系统（这里用随源码提供的测试程序）
+python3 tools/make_runtime.py --fixture build/sandbox-fixture --output /tmp/rt
+
+# 3) 输入目录（files 模式会检查 /input 是只读的）
+mkdir -p /tmp/in /tmp/out && echo "unchanged" > /tmp/in/sample.txt
+
+# 4) 跑
+./build/sandbox run \
+  --runtime /tmp/rt \
+  --cgroup-root "$runs" \
+  --input /tmp/in \
+  --output /tmp/out \
+  --timeout 5000 --memory 256M --summary \
+  -- /usr/bin/sandbox-fixture files
 ```
 
-`--runtime` 是一个只含目标程序及其动态库的目录（怎么做见 [RUNTIME.md](RUNTIME.md)）；
-`--cgroup-root` 指向一个被委派的空 cgroup 子树（在 `systemd-run -p Delegate=yes` 里运行时它就是
-当前 cgroup）。
-
-输出是六行人话：
+期望（关键是多出 `artifacts` 一行）：
 
 ```
 verdict:    ok (success)
 exit code:  0
-output:     stdout 128 bytes, stderr 0 bytes
-artifacts:  delivered (3 entries, 512 bytes), manifest artifact-manifest.json
-time:       42 ms total (18 startup, 24 execution)
-run:        run-3f2a…  (inspect with: sandbox inspect run-3f2a…)
+output:     stdout 27 bytes, stderr 0 bytes
+artifacts:  delivered (1 entries, 10 bytes), manifest artifact-manifest.json
+time:       ... ms total (... startup, ... execution)
+run:        run-...
+exit:       0 (0 means success)
 ```
 
-`verdict=ok` 的含义是"目标正常退出**并且**产物已交付"——这是这个工具唯一想让你记住的语义。
+```console
+$ cat /tmp/out/result.txt          # 产物确实落到了宿主目录
+converted
+```
 
-## 3. 让程序解释这次运行
+**这条命令的形状和仓库验收测试、CI 里跑的完全一致**（`tests/acceptance/isolation.py`），
+所以它通过意味着隔离、文件边界、产物交付三件事都成立。
+
+`/input` 是只读的：目标往 `/input` 写会失败——这是特性，用来验证边界。
+
+## 5. 换成真实模型（可选）
 
 ```bash
-sandbox-ai --provider demo --db ~/.local/state/analysis.db --scope demo \
-    explain --run-dir ~/.local/state/linux-sandbox/<run_id>
+export SANDBOX_AI_BASE_URL=...  SANDBOX_AI_MODEL=...  SANDBOX_AI_API_KEY=...
+PYTHONPATH=. python3 -m sandbox_ai --provider compatible --db /tmp/a.db --scope demo \
+    explain --run-dir /tmp/sbx-$(id -u)/<run_id>
 ```
 
-`--provider demo` 不需要任何凭据，输出是模板文本，用来确认链路通。换成真实模型：
+用 `bash tools/install.sh` 或 `pip install .` 之后可以直接使用 `sandbox-ai` 命令。
 
-```bash
-export SANDBOX_AI_BASE_URL=... SANDBOX_AI_MODEL=... SANDBOX_AI_API_KEY=...
-sandbox-ai --provider compatible --db ~/.local/state/analysis.db --scope demo \
-    explain --run-dir ~/.local/state/linux-sandbox/<run_id>
-```
-
-它会打印：发生了什么（每条都指回某一行证据）、已确认、假设、未知、下一步。
-
-### 只想看结果，不想配隔离
-
-```bash
-sandbox run --process --quiet --summary -- /bin/sh -c 'exit 3'
-```
-
-process 模式**没有隔离**（报告里 `isolated=false`），只用于开发与诊断；但它走同一套报告、
-同一套 `checksums.json`、同一套分析流程，所以可以先把整条链路跑通。
-
-## 4. 下一步
-
-- 想接 CI：[INSTALL.md](INSTALL.md) 与 `action.yml`（如已提供）；
-- 想接自己的程序：[RUNTIME.md](RUNTIME.md)；
-- 想知道它防什么不防什么：[THREAT_MODEL.md](THREAT_MODEL.md)；
-- 想知道哪些字段可以依赖：[CONTRACT.md](CONTRACT.md)；
-- 想清理 /tmp 里堆起来的运行目录：`sandbox prune --keep 20 --dry-run`。
-
-## 常见卡点
+## 6. 卡住了看这里
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `isolation_probe.stage = make_mounts_private, error = Permission denied` | 不允许非特权 user namespace（Ubuntu 23.10+ 默认） | 临时放宽：`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`（用完恢复），或换一台允许的机器 |
-| `stage = cgroup` | 没有委派的 cgroup 子树 | 在 `systemd-run --user -p Delegate=yes` 里运行，或显式传 `--cgroup-root` |
-| `launcher is not executable` | 没装或目录分离 | `bash tools/install.sh`，保证 `sandbox` 与 `sandbox-launcher` 在同一目录 |
-| 报告里 `workspace.export.ok = false` | 产物没交出来 | **这就是失败**，不是"没检查"；`errors` 里有原因 |
+| `available: false, stage: make_mounts_private` | 内核不允许非特权 user namespace（Ubuntu 23.10+ 默认） | 先用路线 A；要真隔离需放宽该 sysctl 或换机器（见 [INSTALL.md](INSTALL.md) 3.1） |
+| `available: false, stage: cgroup` | 没有委派的 cgroup 子树 | `python3 tools/cgroup_setup.py`，或在 `systemd-run --user -p Delegate=yes` 里运行 |
+| 目标 `startup_failure`，stderr 为空 | runtime 里缺解释器/动态库 | 用 [RUNTIME.md](RUNTIME.md) 的方法准备 |
+| `artifacts: NOT delivered` | 产物没交出来 | 这就是失败；看 `workspace.export` 与 `errors[]` |
+| `launcher is not executable` | `sandbox` 与 `sandbox-launcher` 不在同一目录 | 用 `bash tools/install.sh` 安装，并使用安装后的路径 |
+
+## 7. 接下来
+
+- 完整用法（参数、会话、批处理、清理）：[USAGE.md](USAGE.md)
+- 报告字段能不能依赖：[CONTRACT.md](CONTRACT.md)
+- 它防什么不防什么：[THREAT_MODEL.md](THREAT_MODEL.md)
+- 接 CI：[CI.md](CI.md)
