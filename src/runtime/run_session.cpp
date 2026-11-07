@@ -148,6 +148,8 @@ void RunSession::prepare() {
     auto file = std::make_shared<spdlog::sinks::basic_file_sink_st>(
         (store_->directory() / "internal.log").string(), false);
     auto console = std::make_shared<spdlog::sinks::stderr_color_sink_st>();
+    if (config_.quiet)
+        console->set_level(spdlog::level::off); // the file sink still records everything
     logger_ = std::make_shared<spdlog::logger>(report_.id, spdlog::sinks_init_list{file, console});
     logger_->set_pattern("[%H:%M:%S] [%n] [%l] %v");
     logger_->flush_on(spdlog::level::warn);

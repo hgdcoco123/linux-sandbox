@@ -122,11 +122,13 @@ Windows 仅支持配置/状态/报告模型测试，CMake 不会假装构建 Lin
 ./build/sandbox doctor
 ./build/sandbox validate --config profiles/process-demo.json --allow-unsafe
 ./build/sandbox run --config profiles/process-demo.json --allow-unsafe
+# 一行跑完，不写配置文件（诊断后端；人话输出）：
+./build/sandbox run --process --quiet --summary -- /bin/sh -c 'echo hello; exit 3'
 ```
 
 **process 模式只用于可信程序和开发测试，没有文件、网络或资源隔离。** 它复用 launcher、init、I/O、取消和报告流程，但不会把它伪装成安全沙箱。默认模式是 isolated；缺少隔离条件时绝不自动切换成 process。
 
-运行结束 stdout 是 JSON 报告，日志到 stderr 和实例的 internal.log。报告里有 run_id。默认状态根目录 `/tmp/sbx-<uid>`，可用 `--state-root` 修改，路径要足够短以容纳 UNIX socket。
+运行结束 stdout 是 JSON 报告（加 `--summary` 变成六行人话），日志到 stderr 和实例的 internal.log（`--quiet` 关掉 stderr 那份）。报告里有 run_id。默认状态根目录 `/tmp/sbx-<uid>`，可用 `--state-root` 修改，路径要足够短以容纳 UNIX socket。退出码：0 成功、10 非零退出、11 信号、12 启动失败、124 超时、125 清理不完整、130 取消、2 用法错误。
 
 ```bash
 ./build/sandbox inspect run-替换为实际24位十六进制ID

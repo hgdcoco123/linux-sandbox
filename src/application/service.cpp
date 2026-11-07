@@ -28,9 +28,10 @@ void validate_state_separation(const RunConfig &c, const fs::path &state) {
     }
 }
 } // namespace
-RunReport SandboxService::run(const fs::path &file, bool allow) {
+RunReport SandboxService::run(const fs::path &file, bool allow, bool quiet) {
     auto c = RunConfig::load(file);
     c.validate(allow);
+    c.quiet = quiet;
     if (c.persistent)
         throw std::runtime_error("use session-open for persistent configuration");
     validate_state_separation(c, state_root_);

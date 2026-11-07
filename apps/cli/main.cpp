@@ -3,26 +3,136 @@
 #include "sandbox/storage/artifacts.hpp"
 #include "sandbox/application/service.hpp"
 #include "sandbox/runtime/session_protocol.hpp"
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
+#include <string>
 #include <unistd.h>
+#include <vector>
 namespace {
 void help() {
     std::cout
         << "Linux Sandbox 0.5\n"
+           "  sandbox run --config FILE [--state-root DIR] [--launcher PATH] [--allow-unsafe]\n"
+           "  sandbox run [--timeout MS] [--memory BYTES] [--input DIR] [--output DIR] [--quiet] \\\n"
+           "              [--runtime DIR] [--cgroup-root DIR] [--process] [--summary] -- COMMAND...\n"
+           "  sandbox validate --config FILE [--state-root DIR] [--allow-unsafe]\n"
            "  sandbox session-open --config FILE [--state-root DIR] [--allow-unsafe]\n"
            "  sandbox session-request RUN_ID --request FILE [--state-root DIR]\n"
            "  sandbox files --request FILE\n"
            "  sandbox batch --config FILE [--state-root DIR] [--allow-unsafe]\n"
-           "  sandbox run --config FILE [--state-root DIR] [--launcher PATH] [--allow-unsafe]\n"
-           "  sandbox validate --config FILE [--state-root DIR] [--allow-unsafe]\n"
            "  sandbox doctor [--cgroup-root DIR] [--state-root DIR]\n"
            "  sandbox inspect RUN_ID [--state-root DIR]\n"
            "  sandbox cancel RUN_ID [--state-root DIR]\n"
            "  sandbox cleanup [--state-root DIR]\n"
-           "Default isolated mode fails closed. Diagnostic process mode requires explicit "
-           "--allow-unsafe.\n";
+           "\n"
+           "Default isolated mode fails closed. Diagnostic process mode requires explicit\n"
+           "--allow-unsafe (or --process, which implies it).\n"
+           "\n"
+           "Sandbox exit codes: 0 success, 10 nonzero exit, 11 signaled, 12 startup failure,\n"
+           "124 timeout, 125 cleanup incomplete, 130 cancelled, 2 usage/error.\n"
+           "--quiet hides the live log on stderr; internal.log keeps it either way.\n"
+           "--summary prints the result as six human lines instead of the full report.\n";
+}
+std::uint64_t bytes(const std::string &text) {
+    std::size_t end = text.size();
+    std::uint64_t scale = 1;
+    if (end && (text.back() == 'K' || text.back() == 'M' || text.back() == 'G')) {
+        scale = text.back() == 'K' ? 1024ULL : text.back() == 'M' ? 1024ULL * 1024 : 1024ULL * 1024 * 1024;
+        --end;
+    }
+    if (!end)
+        throw std::runtime_error("--memory needs a number, optionally with K/M/G");
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < end; ++i) {
+        if (text[i] < '0' || text[i] > '9')
+            throw std::runtime_error("--memory needs a number, optionally with K/M/G");
+        if (value > (UINT64_MAX - 9) / 10)
+            throw std::runtime_error("--memory is out of range");
+        value = value * 10 + static_cast<std::uint64_t>(text[i] - '0');
+    }
+    if (value && value > UINT64_MAX / scale)
+        throw std::runtime_error("--memory is out of range");
+    return value * scale;
+}
+// One-shot convenience: a config file is still the supported interface, but typing twenty
+// lines of JSON to run one command is a poor first experience, so this synthesises the same
+// config and keeps every rule (unknown fields, limits, mounts) in the one validator.
+sandbox::Json quick_config(const std::map<std::string, std::string> &options,
+                           const std::vector<std::string> &argv, bool process_mode) {
+    if (argv.empty())
+        throw std::runtime_error("nothing to run after --");
+    sandbox::Json config = {{"schema_version", 1},
+                            {"mode", process_mode ? "process" : "isolated"},
+                            {"network", process_mode ? "host" : "none"},
+                            {"cwd", process_mode ? "/tmp" : "/work"},
+                            {"argv", argv}};
+    sandbox::Json limits = sandbox::Json::object();
+    if (options.contains("--timeout"))
+        limits["wall_ms"] = bytes(options.at("--timeout"));
+    if (options.contains("--memory"))
+        limits["memory_bytes"] = bytes(options.at("--memory"));
+    if (!limits.empty())
+        config["limits"] = limits;
+    if (options.contains("--runtime"))
+        config["runtime_root"] = sandbox::fs::absolute(options.at("--runtime")).string();
+    if (options.contains("--cgroup-root"))
+        config["cgroup_root"] = sandbox::fs::absolute(options.at("--cgroup-root")).string();
+    sandbox::Json mounts = sandbox::Json::array();
+    if (options.contains("--input"))
+        mounts.push_back({{"source", sandbox::fs::absolute(options.at("--input")).string()},
+                          {"target", "/input"},
+                          {"readonly", true}});
+    if (options.contains("--output"))
+        mounts.push_back({{"source", sandbox::fs::absolute(options.at("--output")).string()},
+                          {"target", "/output"},
+                          {"readonly", false}});
+    if (!mounts.empty())
+        config["mounts"] = mounts;
+    return config;
+}
+void print_summary(const sandbox::Json &report, int code) {
+    const auto text = [](const sandbox::Json &value, const char *key, const std::string &fallback) {
+        return value.contains(key) && value[key].is_string() ? value[key].get<std::string>() : fallback;
+    };
+    const auto number = [](const sandbox::Json &value, const char *key) {
+        return value.contains(key) && value[key].is_number() ? value[key].get<std::uint64_t>() : 0ULL;
+    };
+    const auto stream = [&](const char *name) {
+        const auto &stream = report.contains(name) ? report[name] : sandbox::Json::object();
+        return std::to_string(number(stream, "saved_bytes")) + " bytes";
+    };
+    std::cout << "verdict:    " << text(report, "verdict", "?") << " (" << text(report, "summary", "?")
+              << ")\n";
+    std::cout << "exit code:  "
+              << (report.contains("exit_code") && report["exit_code"].is_number()
+                      ? std::to_string(report["exit_code"].get<int>())
+                      : std::string("none"))
+              << "\n";
+    std::cout << "output:     stdout " << stream("stdout") << ", stderr " << stream("stderr") << "\n";
+    const auto &workspace = report.contains("workspace") && report["workspace"].is_object()
+                                ? report["workspace"]
+                                : sandbox::Json::object();
+    if (workspace.contains("export")) {
+        const auto &exported = workspace["export"];
+        std::cout << "artifacts:  " << (exported.value("ok", false) ? "delivered" : "NOT delivered")
+                  << " (" << exported.value("entries", 0) << " entries, "
+                  << exported.value("bytes", 0) << " bytes)";
+        if (exported.contains("manifest") && exported["manifest"].is_string())
+            std::cout << ", manifest " << exported["manifest"].get<std::string>();
+        std::cout << "\n";
+    }
+    const auto &timing = report.contains("timing") ? report["timing"] : sandbox::Json::object();
+    std::cout << "time:       " << number(timing, "total_ms") << " ms total ("
+              << number(timing, "startup_ms") << " startup, " << number(timing, "execution_ms")
+              << " execution)\n";
+    std::cout << "run:        " << text(report, "run_id", "?") << "  (inspect with: sandbox inspect "
+              << text(report, "run_id", "?") << ")\n";
+    if (report.contains("errors") && !report["errors"].empty())
+        std::cout << "errors:     " << report["errors"].size() << " reported; see the run report\n";
+    std::cout << "exit:       " << code << " (0 means success)\n";
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -33,13 +143,36 @@ int main(int argc, char **argv) {
         }
         std::string command = argv[1], id;
         std::map<std::string, std::string> options;
-        bool unsafe = false;
+        std::vector<std::string> passthrough;
+        bool unsafe = false, process_mode = false, summary = false, quiet = false;
         for (int i = 2; i < argc; ++i) {
             std::string arg = argv[i];
+            if (arg == "--") {
+                for (++i; i < argc; ++i)
+                    passthrough.emplace_back(argv[i]);
+                break;
+            }
+            if (arg == "--help") {
+                help();
+                return 0;
+            }
             if (arg == "--allow-unsafe") {
                 if (unsafe)
                     throw std::runtime_error("duplicate flag");
                 unsafe = true;
+                continue;
+            }
+            if (arg == "--process") {
+                process_mode = true;
+                unsafe = true;
+                continue;
+            }
+            if (arg == "--quiet") {
+                quiet = true;
+                continue;
+            }
+            if (arg == "--summary") {
+                summary = true;
                 continue;
             }
             if (arg.rfind("--", 0) != 0) {
@@ -49,7 +182,8 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (arg != "--config" && arg != "--state-root" && arg != "--launcher" &&
-                arg != "--cgroup-root" && arg != "--request")
+                arg != "--cgroup-root" && arg != "--request" && arg != "--timeout" &&
+                arg != "--memory" && arg != "--input" && arg != "--output" && arg != "--runtime")
                 throw std::runtime_error("unknown option " + arg);
             if (i + 1 == argc || options.contains(arg))
                 throw std::runtime_error("missing/duplicate option " + arg);
@@ -63,8 +197,13 @@ int main(int argc, char **argv) {
         bool needs_id = command == "inspect" || command == "cancel" || command == "session-request";
         if (needs_id != !id.empty())
             throw std::runtime_error("unexpected or missing run ID");
-        if ((command == "run" || command == "validate") && !options.contains("--config"))
-            throw std::runtime_error("--config required");
+        if (!passthrough.empty() && command != "run")
+            throw std::runtime_error("-- COMMAND... is only supported by run");
+        if ((command == "run" || command == "validate") && !options.contains("--config") &&
+            (command != "run" || passthrough.empty()))
+            throw std::runtime_error("--config required (or: run -- COMMAND...)");
+        if (options.contains("--config") && !passthrough.empty())
+            throw std::runtime_error("use either --config or -- COMMAND..., not both");
         auto self = sandbox::fs::canonical("/proc/self/exe");
         auto state = options.contains("--state-root")
                          ? sandbox::fs::path(options["--state-root"])
@@ -72,6 +211,21 @@ int main(int argc, char **argv) {
         auto launcher = options.contains("--launcher")
                             ? sandbox::fs::absolute(options["--launcher"])
                             : self.parent_path() / "sandbox-launcher";
+        std::string config_path = options.contains("--config") ? options.at("--config") : std::string();
+        std::string synthetic;
+        if (!passthrough.empty()) {
+            // A temporary file keeps one validator: the same rules reject the same mistakes
+            // whether the config came from the user or from the convenience flags.
+            synthetic = (sandbox::fs::temp_directory_path() /
+                         ("sbx-quick-" + std::to_string(::getpid()) + ".json"))
+                            .string();
+            std::ofstream out(synthetic, std::ios::trunc);
+            out << quick_config(options, passthrough, process_mode).dump(2);
+            out.close();
+            if (!out)
+                throw std::runtime_error("cannot write the generated config");
+            config_path = synthetic;
+        }
         sandbox::SandboxService app(state, launcher);
         sandbox::Json output;
         int code = 0;
@@ -101,11 +255,17 @@ int main(int argc, char **argv) {
             output = command == "files" ? sandbox::file_request(request, sandbox::WorkspacePolicy{})
                                         : sandbox::ControlServer::request(state, id, request);
         } else if (command == "run") {
-            auto report = app.run(options.at("--config"), unsafe);
+            auto report = app.run(config_path, unsafe, quiet);
+            if (!synthetic.empty())
+                std::remove(synthetic.c_str());
+            if (summary) {
+                print_summary(report.json(), report.cli_code());
+                return report.cli_code();
+            }
             output = report.json();
             code = report.cli_code();
         } else if (command == "validate")
-            output = app.validate(options.at("--config"), unsafe);
+            output = app.validate(config_path, unsafe);
         else if (command == "doctor")
             output = app.doctor(options.contains("--cgroup-root")
                                     ? sandbox::fs::path(options["--cgroup-root"])
@@ -116,6 +276,8 @@ int main(int argc, char **argv) {
             output = app.cancel(id);
         else
             output = app.cleanup();
+        if (!synthetic.empty())
+            std::remove(synthetic.c_str());
         std::cout << output.dump(2, ' ', false, sandbox::Json::error_handler_t::replace) << '\n';
         return code;
     } catch (const sandbox::SessionError &e) {

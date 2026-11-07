@@ -59,30 +59,67 @@ sandbox doctor
 ## 5. 第一次运行
 
 ```bash
-mkdir -p /tmp/input /tmp/output
-printf 'hello\n' > /tmp/input/sample.txt
-cat > /tmp/job.json <<'JSON'
-{"schema_version": 1, "mode": "isolated", "network": "none",
- "argv": ["/usr/bin/sandbox-fixture", "files"],
- "mounts": [{"source": "/tmp/input", "target": "/input", "readonly": true},
-            {"source": "/tmp/output", "target": "/output", "readonly": false}],
- "limits": {"wall_ms": 2000, "startup_ms": 5000, "grace_ms": 200}}
-JSON
-sandbox run --config /tmp/job.json
+# 最快的路径：不需要写配置文件（process 模式只用于诊断，没有隔离）
+sandbox run --process --summary -- /bin/sh -c 'echo hello; exit 3'
+
+# 隔离模式：给一个 runtime 与委派出来的 cgroup 子树，或直接用 systemd 委派环境里的变量
+sandbox run --runtime /srv/linux-sandbox/runtime --cgroup-root "$SANDBOX_CGROUP" \
+            --input /tmp/input --output /tmp/output \
+            --timeout 2000 --memory 256M --summary -- /usr/bin/sandbox-fixture files
 ```
 
-报告写到 `~/.local/state/linux-sandbox/<run_id>/`（可用 `--state-root` 改）。`verdict=ok` 才表示"目标正常退出且产物已交付"；字段分级见 [CONTRACT.md](CONTRACT.md)。
+配置文件仍然是完整接口（`profiles/` 下有 5 个可直接改的示例）。**最小配置只有四项**，
+`limits` 全是默认值（wall 30s / memory 256MiB / pids 64 / 1 CPU / tmp 32MiB / startup 5s）：
+
+```json
+{"schema_version": 1, "mode": "isolated", "network": "none",
+ "argv": ["/usr/bin/sandbox-fixture", "files"]}
+```
+
+需要时再加 `mounts`（`/input` 只读、`/output` 可写）、`limits`、`runtime_root`、`cgroup_root`。
+报告写到状态目录 `<run_id>/`（`--state-root` 可改）。`verdict=ok` 才表示"目标正常退出且产物已交付"；
+字段分级见 [CONTRACT.md](CONTRACT.md)。
+
+## 5.1 退出码与"看结果"的三种方式
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 成功（目标正常退出且产物已交付） |
+| 10 | 目标非零退出 |
+| 11 | 目标被信号终止 |
+| 12 | 启动失败（exec 之前就挂了） |
+| 124 | 超时 |
+| 125 | 清理不完整（cgroup/工作区残留） |
+| 130 | 被取消 |
+| 2 | 用法或配置错误 |
+
+- `sandbox run --summary ...`：六行人话（判定、退出码、输出字节、产物、耗时、run id）；
+- 默认输出是完整报告 JSON（给程序读）；
+- `sandbox inspect <run_id>` 看单次运行的详情，`sandbox doctor` 看环境能用哪种模式。
+
+## 5.2 装完之后，解释一次失败
+
+```bash
+sandbox-ai --provider demo --db ~/.local/state/analysis.db --scope demo \
+    import --run-dir ~/.local/state/linux-sandbox/<run_id>
+sandbox-ai --provider demo --db ~/.local/state/analysis.db --scope demo \
+    explain --run-dir ~/.local/state/linux-sandbox/<run_id>
+```
+
+`--provider demo` 不需要任何凭据（回答是模板化的，用来验证链路）；接真实模型时用
+`--provider compatible --base-url ... --model ...`，凭据从 `SANDBOX_AI_API_KEY` 读取。
 
 ## 6. 装完能做什么、不能做什么
 
-- 能：单机跑不可信程序、拿结构化报告与产物、跑 Python SDK / 会话 / 批处理。
+- 能：单机跑不可信程序、拿结构化报告与产物、跑 Python SDK / 会话 / 批处理、用 `sandbox-ai` 解释失败。
 - 不能：多租户、鉴权、远程调用；没有 systemd 委派又没有 `cgroup_root` 时无法做 `isolated`。
 - `process` 模式与 `network: host` 都**不是**安全边界，报告里会标 `isolated=false`。
 
 ## 7. 卸载
 
 ```bash
-rm -rf "$prefix/share/linux-sandbox" "$prefix/bin/sandbox" "$prefix/bin/sandbox-launcher"
+rm -rf "$prefix/share/linux-sandbox" "$prefix/bin/sandbox" \
+       "$prefix/bin/sandbox-launcher" "$prefix/bin/sandbox-ai"
 ```
 
 状态目录默认在 `~/.local/state/linux-sandbox/`，由调用方自行清理。

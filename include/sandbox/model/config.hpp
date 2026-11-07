@@ -28,6 +28,9 @@ struct Limits {
 };
 struct RunConfig {
     bool persistent = false;
+    // Not part of the documented config: the CLI sets it when the caller asked for quiet
+    // output, and the run keeps its full log in internal.log either way.
+    bool quiet = false;
     std::uint64_t session_ms = 3600000, idle_ms = 300000;
     struct SamplingConfig {
         std::uint64_t interval_ms = 250;

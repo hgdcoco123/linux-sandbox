@@ -5,7 +5,7 @@ class SandboxService {
   public:
     SandboxService(fs::path state_root, fs::path launcher)
         : state_root_(std::move(state_root)), launcher_(std::move(launcher)) {}
-    RunReport run(const fs::path &config, bool allow_unsafe);
+    RunReport run(const fs::path &config, bool allow_unsafe, bool quiet = false);
     Json validate(const fs::path &config, bool allow_unsafe) const;
     Json doctor(const fs::path &cgroup_root = {}) const;
     Json inspect(const std::string &id) const;

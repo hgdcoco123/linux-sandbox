@@ -27,7 +27,8 @@ launcher="$root/build/sandbox-launcher"
 [ -w "$prefix" ] || [ -w "$(dirname "$prefix")" ] || fail "cannot write to $prefix"
 
 mkdir -p "$prefix/bin" "$prefix/share/linux-sandbox/sdk" \
-         "$prefix/share/linux-sandbox/tools" || fail "cannot create $prefix layout"
+         "$prefix/share/linux-sandbox/tools" \
+         "$prefix/share/linux-sandbox/sandbox_ai" || fail "cannot create $prefix layout"
 
 install -m 0755 "$binary" "$prefix/bin/sandbox" || fail "copying sandbox"
 # The CLI resolves the launcher next to itself, so it must live in the same directory.
@@ -37,14 +38,24 @@ for helper in delegated_run.py delegated_cgroup.py make_runtime.py; do
     [ -f "$root/tools/$helper" ] || fail "missing tools/$helper"
     install -m 0755 "$root/tools/$helper" "$prefix/share/linux-sandbox/tools/" || fail "copying $helper"
 done
+# The analysis layer is part of the product, not a repository-only script: without this the
+# installed tree cannot explain a run at all.
+[ -d "$root/sandbox_ai" ] || fail "missing sandbox_ai package"
+install -m 0644 "$root"/sandbox_ai/*.py "$prefix/share/linux-sandbox/sandbox_ai/" \
+    || fail "copying sandbox_ai"
+printf '#!/bin/sh\nPYTHONPATH="%s${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m sandbox_ai "$@"\n' \
+    "$prefix/share/linux-sandbox" > "$prefix/bin/sandbox-ai" || fail "writing sandbox-ai"
+chmod 0755 "$prefix/bin/sandbox-ai" || fail "chmod sandbox-ai"
 
 cat <<TEXT
 == installed
    binaries : $prefix/bin/sandbox, $prefix/bin/sandbox-launcher
+   explain  : $prefix/bin/sandbox-ai        # same CLI as python -m sandbox_ai
    sdk      : $prefix/share/linux-sandbox/sdk
    helpers  : $prefix/share/linux-sandbox/tools
 == next
    1. put $prefix/bin on PATH (if it is not already)
    2. $prefix/bin/sandbox doctor        # reports which startup modes work here
-   3. read docs/INSTALL.md for what "isolated" needs beyond a working binary
+   3. $prefix/bin/sandbox run --summary -- /bin/echo hello
+   4. read docs/INSTALL.md for what "isolated" needs beyond a working binary
 TEXT

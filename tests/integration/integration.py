@@ -57,6 +57,12 @@ with tempfile.TemporaryDirectory(prefix="sbxt-") as temp:
         digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
         require(checksums["files"][name]["sha256"] == digest, "checksum mismatch: " + name)
         require(checksums["files"][name]["size"] == (directory / name).stat().st_size, checksums)
+    # The one-line form must reach the same validator and the same exit codes.
+    quick = subprocess.run([BIN, "run", "--process", "--quiet", "--summary", "--",
+                            "/bin/sh", "-c", "exit 5"], capture_output=True, text=True)
+    require(quick.returncode == 10, "quick run exit code: " + str(quick.returncode))
+    require("verdict:" in quick.stdout and "nonzero_exit" in quick.stdout, quick.stdout)
+    require("state=" not in quick.stdout, "quiet summary should not contain the live log")
     report, _ = run(["/bin/sh", "-c", "exit 7"], "nonzero_exit")
     require(report["exit_code"] == 7, report)
     run(["/not-existing-program"], "startup_failure")
