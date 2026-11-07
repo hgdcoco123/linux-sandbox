@@ -9,6 +9,24 @@ import uuid
 
 from .models import AnalysisError, Bundle, Evidence, canonical
 
+try:
+    import fcntl
+except ImportError:  # Windows: no flock, so no cross-process guard
+    fcntl = None
+
+
+def _lock(path):
+    """Exclusive advisory lock next to the database, released on close."""
+    if fcntl is None:
+        return None
+    handle = open(str(path) + '.lock', 'w')
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise AnalysisError('This database is already open in another process; one writer is allowed')
+    return handle
+
 
 def tokens(text):
     words = re.findall(r'[a-z0-9_./:-]+|[\u4e00-\u9fff]', text.lower())
@@ -25,10 +43,16 @@ def normalize(vector):
     return [v/norm for v in vector]
 
 
+SCHEMA_VERSION = 1
+
+
 class Store:
     def __init__(self, path):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # One writer at a time. WAL keeps readers going, but two writers on the same file can
+        # interleave imports; a lock file makes that a clear error instead of a duplicate row.
+        self._lock = _lock(path)
         self.db = sqlite3.connect(path, timeout=10)
         # Reading a scope's corpus means parsing every evidence row; every query and every
         # search_history tool call used to do that. The cache is dropped by a generation
@@ -36,6 +60,15 @@ class Store:
         self._generation = 0
         self._corpus = {}
         self.db.execute('PRAGMA journal_mode=WAL')
+        # A database written by a newer version of this code is refused rather than migrated
+        # by guesswork: silently writing into a schema we do not understand is how data is lost.
+        version = self.db.execute('PRAGMA user_version').fetchone()[0]
+        if version > SCHEMA_VERSION:
+            self.db.close()
+            self._release_lock()
+            raise AnalysisError('This database was written by a newer version (schema ' +
+                                str(version) + ' > ' + str(SCHEMA_VERSION) +
+                                '); upgrade the tool or use another file')
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS bundles(scope TEXT, run TEXT, body TEXT,
             PRIMARY KEY(scope,run));
@@ -66,9 +99,21 @@ class Store:
                                 'GROUP BY scope,statement,status,run_id)')
             self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS hypothesis_unique '
                             'ON hypothesis_status(scope,statement,status,run_id)')
+        if version < SCHEMA_VERSION:
+            self.db.execute('PRAGMA user_version = ' + str(SCHEMA_VERSION))
+
+    def _release_lock(self):
+        if self._lock is not None:
+            try:
+                fcntl.flock(self._lock.fileno(), fcntl.LOCK_UN)
+            except (OSError, AttributeError):
+                pass
+            self._lock.close()
+            self._lock = None
 
     def close(self):
         self.db.close()
+        self._release_lock()
 
     def put_bundle(self, bundle, force=False):
         """Store a snapshot; skip it when the identical snapshot is already there.

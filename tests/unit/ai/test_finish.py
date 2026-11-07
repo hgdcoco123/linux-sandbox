@@ -237,6 +237,43 @@ class SelfCheck(unittest.TestCase):
         self.assertEqual(bad['checked'], 1)
 
 
+class DatabaseContract(unittest.TestCase):
+    def test_a_newer_database_is_refused(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'future.db'
+            db = sqlite3.connect(path)
+            db.execute('PRAGMA user_version = 99')
+            db.commit()
+            db.close()
+            with self.assertRaisesRegex(AnalysisError, 'newer version'):
+                Store(path)
+
+    def test_one_writer_at_a_time(self):
+        import os
+        if os.name != 'posix':
+            self.skipTest('the advisory lock is POSIX only')
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'s.db'
+            first = Store(path)
+            try:
+                with self.assertRaisesRegex(AnalysisError, 'already open'):
+                    Store(path)
+            finally:
+                first.close()
+            second = Store(path)
+            second.close()
+
+    def test_a_fresh_database_records_its_schema_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp)/'s.db')
+            try:
+                version = store.db.execute('PRAGMA user_version').fetchone()[0]
+                self.assertEqual(version, 1)
+            finally:
+                store.close()
+
+
 class LegacyDatabase(unittest.TestCase):
     def test_a_database_with_duplicate_hypotheses_still_opens(self):
         # The unique index arrived after the table did; an older file must not become
