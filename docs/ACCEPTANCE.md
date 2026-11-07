@@ -6,6 +6,7 @@
 > - 已验证到的行为：namespace/cgroup/seccomp 边界、`/input` 只读与 `snapshot_copy`、隔离模式
 >   `/output` 的 tmpfs 配额（会话累计；单次执行/批量在结束时一次性导出）、`/transfer` 的 fd 化
 >   双向移交、导出失败与超时/中断的报告语义。
+> - **交付清单**（2026-11-07 演练）：隔离运行的报告里出现 `workspace.export.manifest = "artifact-manifest.json"`、`manifest_entries = 1`，清单里的 `sha256` 与落地文件 `verify-output/value` 的 `sha256sum` **一致**。
 > - **没有**验证过：其他发行版/内核、崩溃与掉电恢复、长时间压力、真正的恶意代码。
 >
 > 下面第 2–3 节是复现路径；第 4–7 节是失败时回传什么、以及最容易出问题的地方。
