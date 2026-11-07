@@ -14,6 +14,17 @@ export PATH="$HOME/.local/bin:$PATH"
 没有 systemd 用户会话、或不允许非特权 user namespace？**先跳到第 3 节的"只看结果"路径**，
 那不需要隔离也能验证整条链路。
 
+### 只要分析层？用 pip 装（不需要编译 C++）
+
+```bash
+python3 -m venv /tmp/v && . /tmp/v/bin/activate     # Ubuntu 24.04 有 PEP 668，venv 最省事
+pip install .                 # 或 pip install ".[sdk]" 连带装会话 SDK 需要的 protobuf
+sandbox-ai --help
+sandbox-ai --provider demo --db /tmp/a.db --scope demo demo --output /tmp/demo-out
+```
+
+这样装出来的 `sandbox-ai` 可以分析**任何**一份从 Linux 拷来的运行目录——包括在别的机器、CI 或容器里跑出来的。
+
 ## 1. 看这台机器能跑哪种模式
 
 ```bash

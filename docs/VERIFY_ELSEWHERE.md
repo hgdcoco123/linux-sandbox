@@ -3,6 +3,10 @@
 这两项在本项目的开发环境里做不到，但都不需要改代码。任何有条件的机器跑一次，把输出贴回
 issue 或提交里即可。
 
+> **2026-11-07 更新**：第 2 项（pip 安装）已在开发虚拟机上实测通过——`pip install .` 构建 wheel 并安装、
+> `sandbox-ai` 命令可用、`.[sdk]` 拉到 protobuf、`pip wheel` 产出 `linux_sandbox-0.5.0-py3-none-any.whl`。
+> 留下的两项是需要不同环境的那两个：GitHub runner、容器里的 cgroup。
+
 ## 1. GitHub 托管 runner 上的 action
 
 **为什么本机做不了**：本机验证的是 `tools/ci_run.py` 这一步（同一个委派机制），没有走 GitHub
@@ -21,7 +25,7 @@ artifacts-ok=true
 如果 runner 禁止非特权 user namespace，`doctor` 会报 `stage: make_mounts_private`，action 会明确
 失败并打印该 stage——这也是一个可接受的结果，请把那一行贴回来，它说明 runner 的环境限制。
 
-## 2. `pip install .` 的 wheel 构建
+## 2. `pip install .` 的 wheel 构建（已在开发机验证，保留供复现）
 
 **为什么本机做不了**：开发环境的解释器没有 pip，也没有 `python3-venv`。
 

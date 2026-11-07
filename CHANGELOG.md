@@ -51,4 +51,4 @@
 ## 未发布
 
 - 报告 JSON Schema 与 golden 快照、CI 中运行分析层测试、预编译发行包与容器镜像。
-- `pip install .` 的 wheel 构建本身未在目标环境实测（只有元数据与入口点被验证）。
+- `pip install .` 已验证：wheel 构建、安装、`sandbox-ai` 入口、`.[sdk]` 的 protobuf。
