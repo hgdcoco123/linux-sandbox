@@ -74,6 +74,32 @@ sandbox doctor
 **glibc 下限**：发布包在 Ubuntu 24.04 上构建，要求 `GLIBC_2.38` / `GLIBCXX_3.4.32`。
 更老的系统（如 Ubuntu 22.04）请从源码构建。
 
+## 2.2 没有 git、也连不上 GitHub
+
+这种机器上**不要用 clone 那条路**。预编译包是自包含的，只要有 `tar` 就够：
+
+```bash
+# 1) 在任意一台能上网的机器上取得两个文件（浏览器或 curl 都行）
+#    linux-sandbox-0.5.1-linux-x86_64.tar.gz
+#    linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256
+# 2) 拷到目标机（U 盘、scp、共享目录都可以），然后：
+
+sha256sum -c linux-sandbox-0.5.1-linux-x86_64.tar.gz.sha256   # 必须 OK
+
+mkdir -p ~/.local
+tar -xzf linux-sandbox-0.5.1-linux-x86_64.tar.gz -C ~/.local
+export PATH="$HOME/.local/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"
+echo 'export PATH="$HOME/.local/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"' >> ~/.bashrc
+
+sandbox --version                       # sandbox 0.5.1
+sandbox run --process --quiet --summary -- /bin/sh -c 'echo hi; exit 3'   # exit=10 才算装好
+```
+
+需要的东西：`tar`（几乎都有）、`sha256sum`（coreutils）。**不需要** git、curl、root、编译工具链。
+包里的 `bin/sandbox-ai` 会按自身位置找 Python 包，所以只要系统有 `python3`，分析层也能直接用。
+
+如果 `/opt` 可写或愿意用 sudo，把 `~/.local` 换成 `/opt` 即可，其余不变。
+
 ## 3. 三种启动模式
 
 判定顺序：**systemd 用户委派 → 显式 `cgroup_root` → `process` 诊断模式**。
