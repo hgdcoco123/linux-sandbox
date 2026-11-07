@@ -126,6 +126,18 @@ sandbox run --process --quiet --summary -- /bin/sh -c 'echo hi; exit 3'   # exit
 | `make_mounts_private` + `unprivileged_userns_clone: "0"` | Debian 系的旧开关关掉了 user namespace | `sudo sysctl -w kernel.unprivileged_userns_clone=1` |
 | `cgroup` | 没有可委派的 cgroup 子树 | 见下面 3.1：`systemd-run --user -p Delegate=yes` 或 `tools/cgroup_setup.py` |
 
+**已验证（Ubuntu 24.04，0.5.2 安装包，2026-11）**：用装好的 `~/.local/bin/sbx` 在
+`systemd-run --user -p Delegate=yes` 里跑一次隔离执行——`isolated: true`、`verdict: ok`、
+`artifacts_ok: true`、`/output/result.txt` 内容正确。前提是把
+`kernel.apparmor_restrict_unprivileged_userns` 临时设为 0（脚本会恢复）。
+
+`isolation_probe.apparmor_context` 可以直接看出是不是被 LSM 拦的：
+
+| `apparmor_context` | 含义 |
+|---|---|
+| `unprivileged_userns (enforce)` | 当前进程被 AppArmor 的 userns 策略覆盖 → 隔离会被拒（errno 13） |
+| `unconfined` | 未被覆盖；此时若仍失败，问题在 cgroup 或其他权限 |
+
 永久放行 AppArmor 的做法（Ubuntu 23.10+）：
 
 ```bash
