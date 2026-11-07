@@ -43,8 +43,13 @@ done
 [ -d "$root/sandbox_ai" ] || fail "missing sandbox_ai package"
 install -m 0644 "$root"/sandbox_ai/*.py "$prefix/share/linux-sandbox/sandbox_ai/" \
     || fail "copying sandbox_ai"
-printf '#!/bin/sh\nPYTHONPATH="%s${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m sandbox_ai "$@"\n' \
-    "$prefix/share/linux-sandbox" > "$prefix/bin/sandbox-ai" || fail "writing sandbox-ai"
+# Relocatable on purpose: the same wrapper has to work from a prefix and from an unpacked
+# release tarball, so the package root is derived from the script's own location.
+cat > "$prefix/bin/sandbox-ai" <<'WRAPPER' || fail "writing sandbox-ai"
+#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$here/../share/linux-sandbox${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m sandbox_ai "$@"
+WRAPPER
 chmod 0755 "$prefix/bin/sandbox-ai" || fail "chmod sandbox-ai"
 
 cat <<TEXT

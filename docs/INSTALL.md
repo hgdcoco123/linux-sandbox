@@ -28,6 +28,18 @@ $prefix/share/linux-sandbox/sdk/*.py   # Python SDK
 $prefix/share/linux-sandbox/tools/*.py # 委派/运行时辅助脚本
 ```
 
+## 2.1 或者用预编译包（不用装编译工具链）
+
+```bash
+bash tools/pack.sh                       # 在你机器上构建一次，产出 dist/linux-sandbox-<ver>-linux-<arch>.tar.gz + .sha256
+tar -xzf linux-sandbox-<ver>-linux-<arch>.tar.gz -C /opt
+/opt/linux-sandbox-<ver>-linux-<arch>/bin/sandbox doctor
+export PATH="/opt/linux-sandbox-<ver>-linux-<arch>/bin:$PATH"
+```
+
+包内是自洽的：`bin/`（两个二进制 + `sandbox-ai`）、`share/linux-sandbox/`（SDK、辅助脚本、分析层）、
+`docs/`、`LICENSE`。解包即可用，`sandbox-ai` 会按自身位置找到 Python 包。
+
 ## 3. 三种启动模式
 
 判定顺序：**systemd 用户委派 → 显式 `cgroup_root` → `process` 诊断模式**。
@@ -39,6 +51,25 @@ $prefix/share/linux-sandbox/tools/*.py # 委派/运行时辅助脚本
 | **process 诊断** | 只想在本机复现执行/采集输出，不需要隔离 | `sandbox run --config x.json --allow-unsafe`（配置 `"mode":"process"`） | **无隔离**，报告里 `isolated=false` |
 
 `process` 模式不是安全边界，只用于"本机诊断"；它也会写 `result.json`、`internal.log`、`stdout/stderr.bin`，所以下游分析可以复用。
+
+## 3.1 没有 systemd 怎么办
+
+沙箱需要的是**一个可写、无进程、暴露了 cpu/memory/pids 的 cgroup v2 子树**。systemd 只是来源之一，
+不是前提。三种情况：
+
+| 环境 | 怎么拿这个子树 | 结果 |
+|---|---|---|
+| 有 user systemd | `systemd-run --user -p Delegate=yes …`（SDK 的 `startup=auto` 会自动做） | 完整隔离 |
+| 容器 / 无 systemd，但进程对自己的 cgroup 有写权限（例如 `docker run --cgroupns=private` 且足够权限） | `python3 tools/cgroup_setup.py` 直接把它的 cgroup 变成可用子树，并打印要传给 `--cgroup-root` 的路径 | 完整隔离 |
+| 既没有 systemd，也没有可写 cgroup（大多数普通容器） | 只能 `--process`（诊断后端，**没有隔离**） | 能跑通链路，但不是安全边界 |
+
+`tools/cgroup_setup.py` 失败时会说明卡在哪一类：不能创建子 cgroup、控制器不可用、还是父 cgroup 里仍有进程。
+它不会去动 `/sys/fs/cgroup` 本身，也不会改任何全局设置。
+
+```bash
+runs=$(python3 tools/cgroup_setup.py) || exit 1
+sandbox run --runtime /srv/rt --cgroup-root "$runs" --summary -- /bin/hello
+```
 
 ## 4. 环境自检
 
