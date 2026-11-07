@@ -53,21 +53,26 @@ run() {
 echo "== mirror: $slug (version $version)"
 echo "== push branches and tags"
 if ! run git push --prune "$remote" "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"; then
-    cat >&2 <<EOF
-
-mirror: push was refused. Two ways forward:
-
-  1) register this machine's key on Gitee (then re-run this script):
-     https://gitee.com/profile/sshkeys
-     paste the line printed by:  cat ~/.ssh/id_ed25519.pub
-
-  2) push over HTTPS with a token instead of a key:
-     bash tools/mirror_to_gitee.sh --remote https://<username>:<GITEE_TOKEN>@gitee.com/$slug.git
-     (token from https://gitee.com/profile/personal_access_tokens, scope: projects)
-EOF
+    # "Cannot authenticate" and "the repository is not there" need different fixes; a Gitee
+    # Auth error 404 on an already-registered key almost always means the repo was never created.
+    code=$(curl -s -o /dev/null -w '%{http_code}' "https://gitee.com/$slug" 2>/dev/null || echo 000)
+    if [ "$code" = "404" ]; then
+        printf '%s\n\n' >&2 \
+            "mirror: https://gitee.com/$slug returns 404 - the repository does not exist yet." \
+            "  Create an EMPTY repository first (do not initialise it with a README):" \
+            "    https://gitee.com/projects/new   name: linux-sandbox   path: $slug" \
+            "  then re-run this script. Your SSH key is already accepted (the error is 404, not publickey)."
+        exit 1
+    fi
+    printf '%s\n\n' >&2 \
+        "mirror: push was refused. Two ways forward:" \
+        "  1) register this machine's key on Gitee, then re-run:" \
+        "     https://gitee.com/profile/sshkeys     (paste: cat ~/.ssh/id_ed25519.pub)" \
+        "  2) push over HTTPS with a token instead of a key:" \
+        "     bash tools/mirror_to_gitee.sh --remote https://<username>:<GITEE_TOKEN>@gitee.com/$slug.git" \
+        "     (token: https://gitee.com/profile/personal_access_tokens, scope: projects)"
     exit 1
 fi
-
 if [ -z "$release" ]; then
     cat <<EOF
 
