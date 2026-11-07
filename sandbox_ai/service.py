@@ -189,7 +189,7 @@ def validate_analysis(value, seen, resolved=None):
 class Analyzer:
     def __init__(self, store, provider, semantic=False, templates=None, max_calls=6,
                  max_tools=4, max_context_chars=48000, deadline_seconds=180, reranker=None,
-                 self_check=False):
+                 self_check=False, require_tool_once=False):
         if not 1 <= max_calls <= 10 or not 0 <= max_tools <= 8:
             raise AnalysisError('Invalid model/tool call budget')
         self.store, self.provider = store, provider
@@ -197,6 +197,9 @@ class Analyzer:
         self.max_calls, self.max_tools = max_calls, max_tools
         self.max_chars, self.deadline = max_context_chars, deadline_seconds
         self.self_check = self_check
+        # A real model does not reliably call a tool just because the question mentions one;
+        # when the caller wants a proposal, the first turn is forced to produce a tool call.
+        self.require_tool_once = require_tool_once
 
     def judge(self, analysis, seen):
         """Ask the model whether each cited line, alone, supports its claim.
@@ -334,7 +337,9 @@ class Analyzer:
                 if len(canonical(messages)) > self.max_chars:
                     raise AnalysisError('Context character budget exceeded')
                 allowed = TOOLS[:2] + (TOOLS[2:] if self.templates else [])
-                message = self.provider.complete(messages, allowed if tool_count < self.max_tools else [])
+                message = self.provider.complete(
+                    messages, allowed if tool_count < self.max_tools else [],
+                    force_tool=(self.require_tool_once and number == 0 and tool_count < self.max_tools))
                 if time.monotonic() - started >= self.deadline:
                     raise AnalysisError('Analysis deadline exceeded')
                 if not isinstance(message, dict) or len(canonical(message)) > 20000:

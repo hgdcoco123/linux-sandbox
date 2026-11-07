@@ -59,6 +59,20 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(AnalysisError):
                     client.complete([], [])
 
+    def test_forced_tool_choice_is_required(self):
+        client = self.provider()
+        body = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': '{}'}}]}).encode()
+        tools = [{'type': 'function', 'function': {'name': 'propose_verification'}}]
+        with patch('sandbox_ai.providers.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(body)
+            client.complete([{'role': 'user', 'content': 'q'}], tools, force_tool=True)
+            payload = json.loads(factory.return_value.open.call_args.args[0].data)
+            self.assertEqual(payload['tool_choice'], 'required')
+            factory.return_value.open.return_value = io.BytesIO(body)
+            client.complete([{'role': 'user', 'content': 'q'}], tools)
+            payload = json.loads(factory.return_value.open.call_args.args[0].data)
+            self.assertEqual(payload['tool_choice'], 'auto')
+
     def test_rerank_request_and_ordering(self):
         with patch.dict('os.environ', {'TEST_AI_KEY': 'fake-test-key'}):
             client = CompatibleProvider('https://example.test/v1', 'chat-test', key_env='TEST_AI_KEY',

@@ -220,7 +220,7 @@ class SelfCheck(unittest.TestCase):
         class Provider:
             identity = 'self-check'
             usage = []
-            def complete(self, messages, tools):
+            def complete(self, messages, tools, force_tool=False):
                 return dict(role='assistant', content=json.dumps(dict(verdicts=verdicts)))
         return Provider()
 

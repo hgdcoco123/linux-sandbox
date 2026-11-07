@@ -130,11 +130,13 @@ class CompatibleProvider:
                 self._thread.join(timeout=0.2)
                 self._thread = None
 
-    def complete(self, messages, tools):
+    def complete(self, messages, tools, force_tool=False):
         payload = dict(model=self.model, messages=messages, temperature=0,
                        max_tokens=self.max_tokens)
         if tools:
-            payload.update(tools=tools, tool_choice='auto', parallel_tool_calls=False)
+            payload.update(tools=tools,
+                           tool_choice='required' if force_tool else 'auto',
+                           parallel_tool_calls=False)
         response = self.post('/chat/completions', payload)
         try:
             choice = response['choices'][0]
@@ -210,7 +212,7 @@ class DemoProvider:
     identity = 'offline-demo-v1'
     usage = ()
 
-    def complete(self, messages, tools):
+    def complete(self, messages, tools, force_tool=False):
         initial = json.loads(messages[1]['content'])
         if tools and not any(m['role'] == 'tool' for m in messages):
             return dict(role='assistant', content=None, tool_calls=[dict(id='demo-search', type='function',

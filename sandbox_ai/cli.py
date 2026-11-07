@@ -45,6 +45,8 @@ def parser():
     p.add_argument('--key-env', default='SANDBOX_AI_API_KEY')
     p.add_argument('--quiet', action='store_true', help='No progress heartbeat on stderr')
     p.add_argument('--reimport', action='store_true', help='Re-import even if the snapshot is unchanged')
+    p.add_argument('--require-proposal', action='store_true',
+                   help='Force the first turn to call a tool (a proposal) instead of answering')
     p.add_argument('--self-check', action='store_true',
                    help='Ask the model whether each cite actually supports its claim (recorded only)')
     p.add_argument('--allow-local-http', action='store_true')
@@ -240,6 +242,7 @@ def main(argv=None):
             engine = Analyzer(store, provider(args), semantic=args.semantic,
                               reranker=provider(args) if args.rerank else None,
                               self_check=args.self_check,
+                              require_tool_once=args.require_proposal,
                               templates=Templates(args.templates) if args.templates else None)
             result = engine.analyze(args.scope, args.run_id, args.question, args.session, args.refresh)
         elif args.command == 'explain':

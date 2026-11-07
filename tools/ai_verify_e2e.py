@@ -45,7 +45,7 @@ class Scripted:
         self.replies = list(replies)
         self.prompts = []
 
-    def complete(self, messages, tools):
+    def complete(self, messages, tools, force_tool=False):
         self.prompts.append(json.loads(messages[1]['content']))
         if not self.replies:
             raise AssertionError('unexpected model call')
