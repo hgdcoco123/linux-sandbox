@@ -58,6 +58,26 @@
 
 这些不是"设计里考虑过"，是**真机上抓到并修掉**的；它们恰好构成"为什么需要这套语义"的最好论据。
 
+### 4.1 一次真实的环境阻塞，以及它改掉的设计
+
+不是 bug，但同样来自真机：一台 Ubuntu 24.04 上 `sandbox doctor` 只报
+`stage: make_mounts_private, errno: 13`，用户无从知道下一步该做什么，只能猜。
+
+处理顺序反映了这套东西的态度：
+
+1. 先确认不是沙箱的问题：`clone3` 成功、`max_user_namespaces` 充足，卡在
+   `mount --make-private` —— 说明是 LSM（AppArmor）拒绝，而不是权限或内核不支持；
+2. `doctor` 增加 `isolation_probe.remedy`：按 `stage` 与环境策略
+   （`apparmor_restrict_unprivileged_userns`、`unprivileged_userns_clone`、cgroup）生成可执行的下一步，
+   并在 stderr 打一行——**只报 stage 是一种未完成的诊断**；
+3. 文档补 `INSTALL.md` 3.0：stage → 处理方式，含只给本 launcher 放行 `userns,` 的 AppArmor profile；
+4. 回归约束：`tests/integration/environment_diagnostics.py` 现在要求"探测不可用时必须带可执行的
+   `remedy`"，防止以后退化成只报 stage。
+
+真机结论（Ubuntu 24.04，0.5.2 安装包）：`apparmor_restrict_unprivileged_userns` **保持 1** 时，
+加载该 profile 后 `available: true`、`stage: completed`、`apparmor_context` 显示
+`linux-sandbox-launcher (unconfined)`。也就是说不需要牺牲全局策略。
+
 ## 5. 明确不提供的
 
 - **不是多租户**：`scope` 是单用户工具内的项目边界，不是鉴权。
