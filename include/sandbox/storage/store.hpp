@@ -5,6 +5,11 @@
 #include <functional>
 #include <memory>
 namespace sandbox {
+// Hash the files a run (or a session command) leaves behind, so a consumer can prove the
+// bytes it cites are the bytes this run wrote. Absent files are skipped; the result is
+// {schema_version, run_id, algorithm:"sha256", files:{name:{sha256,size}}}.
+Json write_checksums(const fs::path &directory, const std::string &run_id);
+
 class RunStore {
   public:
     static std::unique_ptr<RunStore> create(const fs::path &root, const RunConfig &);

@@ -1,6 +1,7 @@
 #include "sandbox/storage/session_store.hpp"
 
 #include "sandbox/core/record_json.hpp"
+#include "sandbox/storage/store.hpp"
 
 #include <chrono>
 #include <map>
@@ -224,6 +225,9 @@ void SessionStore::finish(const FinishedCommand &finished) {
     }
     try {
         store_.write_json(id + "/result.json", encode(finished));
+        // The same provenance a one-shot run gets: a consumer that cites this command can
+        // verify the bytes it read are the bytes the command wrote.
+        write_checksums(store_.directory() / id, id);
     } catch (const std::exception &e) {
         throw StorageError(e.what());
     }

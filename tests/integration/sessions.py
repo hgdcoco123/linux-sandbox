@@ -83,6 +83,19 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
         second = session.execute(["/bin/cat", "value"])
         assert second.wait(5)["exit_code"] == 0
         assert second.output()["bytes"] == b"hello"
+        # A finished command hashes what it left behind, the same provenance a one-shot run
+        # gets: citing a line from this command can be checked against the command's own bytes.
+        import hashlib
+        awaited = session.execute(["/bin/sh", "-c", "printf stable > value; printf oops >&2"])
+        awaited.wait(5)
+        command_dir = session.directory / awaited.command_id
+        recorded = json.loads((command_dir / "checksums.json").read_text())
+        assert recorded["algorithm"] == "sha256"
+        assert recorded["run_id"] == awaited.command_id
+        for name in ("result.json", "stdout.bin", "stderr.bin"):
+            data = (command_dir / name).read_bytes()
+            assert recorded["files"][name]["sha256"] == hashlib.sha256(data).hexdigest(), name
+            assert recorded["files"][name]["size"] == len(data), name
         assert session.execute(["/bin/sh", "-c", "exit 7"]).wait(5)["exit_code"] == 7
         assert session.execute(["/not-existing"]).wait(5)["exec_errno"] is not None
         slow = session.execute(["/bin/sleep", "20"])
@@ -106,6 +119,7 @@ with tempfile.TemporaryDirectory(prefix="sbx-session-") as tmp:
         flood = session.execute(["/bin/sh", "-c", "head -c 20000 /dev/zero"])
         result = flood.wait(5)
         assert result["stdout"]["stored"] == 4096 and result["stdout"]["seen"] == 20000
+
         assert result['stdout']['flushed'] and result['stderr']['flushed']
         assert result['stdout']['queue_peak_bytes'] <= 256*1024
         assert session.execute(["/bin/true"]).wait(5)["exit_code"] == 0

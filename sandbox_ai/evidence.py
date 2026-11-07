@@ -399,8 +399,11 @@ def verify_provenance(run_dir, run_id, warnings):
     if not isinstance(files, dict) or manifest.get('algorithm') != 'sha256':
         warnings.append('checksums.json is not understood: evidence provenance unverified')
         return provenance
-    if manifest.get('run_id') not in (None, run_id):
-        raise AnalysisError('Run directory claims run ' + str(manifest.get('run_id')) +
+    # A command record is namespaced by its session on this side (session/cmd-3) while the
+    # command directory knows only `cmd-3`, so the trailing component is the same identity.
+    claimed = manifest.get('run_id')
+    if claimed not in (None, run_id, str(run_id).rsplit('/', 1)[-1]):
+        raise AnalysisError('Run directory claims run ' + str(claimed) +
                             ' but its report says ' + run_id)
     provenance['run_id'] = manifest.get('run_id')
     for name, entry in sorted(files.items()):

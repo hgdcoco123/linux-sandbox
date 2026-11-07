@@ -180,6 +180,35 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(bundle.provenance['status'], 'unverified')
             self.assertTrue([w for w in bundle.warnings if 'provenance unverified' in w])
 
+    def test_a_command_record_is_verified_too(self):
+        # A session command directory has the same checksums but a different report shape,
+        # and its identity is namespaced by the session on the analysis side.
+        import hashlib
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            session = root/'sess'
+            command = session/'cmd-1'
+            command.mkdir(parents=True)
+            (command/'result.json').write_text(json.dumps(dict(
+                index='cmd-1',
+                result=dict(outcome=dict(kind='exit', exit_code=3),
+                            stdout=dict(stored=2), stderr=dict(stored=4)))))
+            (command/'stdout.bin').write_bytes(b'ok')
+            (command/'stderr.bin').write_bytes(b'boom')
+            files = {}
+            for name in ('result.json', 'stdout.bin', 'stderr.bin'):
+                data = (command/name).read_bytes()
+                files[name] = dict(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+            (command/'checksums.json').write_text(json.dumps(dict(
+                schema_version=1, run_id='cmd-1', algorithm='sha256', files=files)))
+            bundle = collect('p', command)
+            self.assertEqual(bundle.run_id, 'sess/cmd-1')
+            self.assertEqual(bundle.provenance['status'], 'verified')
+            (command/'stderr.bin').write_bytes(b'BOOM')
+            with self.assertRaisesRegex(AnalysisError, 'modified after the run finished'):
+                collect('p', command)
+
+
     def test_a_missing_listed_file_is_partial(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

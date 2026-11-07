@@ -94,11 +94,12 @@ void RunStore::write_json(const std::string &name, const Json &value) {
     }
     checked(::fsync(directory_fd_.get()), "fsync state dir");
 }
-void RunStore::checksums() {
+Json write_checksums(const fs::path &directory, const std::string &run_id) {
+    auto dir = open_dir(directory);
     Json files = Json::object();
-    for (const auto *name : {"result.json", "config.json", "stdout.bin", "stderr.bin",
-                             "internal.log"}) {
-        auto raw = ::openat(directory_fd_.get(), name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    for (const auto *name : {"result.json", "config.json", "request.json", "stdout.bin",
+                             "stderr.bin", "internal.log"}) {
+        auto raw = ::openat(dir.get(), name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
         if (raw < 0) {
             if (errno == ENOENT)
                 continue; // not every run has every stream; absence is not a failure
@@ -120,10 +121,26 @@ void RunStore::checksums() {
         }
         files[name] = Json{{"sha256", digest.hex()}, {"size", size}};
     }
-    write_json("checksums.json", Json{{"schema_version", 1},
-                                      {"run_id", id_},
-                                      {"algorithm", "sha256"},
-                                      {"files", files}});
+    const Json manifest = {{"schema_version", 1},
+                           {"run_id", run_id},
+                           {"algorithm", "sha256"},
+                           {"files", files}};
+    // Written the same way as every other record: temp, fsync, rename, fsync directory.
+    auto temp = UniqueFd(checked(::openat(dir.get(), "checksums.json.tmp",
+                                          O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
+                                          0600),
+                                 "open checksums temp"));
+    write_all(temp.get(), manifest.dump(2, ' ', false, Json::error_handler_t::replace));
+    checked(::fsync(temp.get()), "fsync checksums");
+    temp.reset();
+    checked(::renameat(dir.get(), "checksums.json.tmp", dir.get(), "checksums.json"),
+            "rename checksums");
+    checked(::fsync(dir.get()), "fsync checksums dir");
+    return manifest;
+}
+
+void RunStore::checksums() {
+    write_checksums(directory_, id_);
 }
 
 void RunStore::state(RunState s, const Json &extra) {
