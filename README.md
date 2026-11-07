@@ -47,6 +47,32 @@ exit:       0 (0 means success)
 
 ## 快速开始
 
+### 国内用户：从 Gitee 下载（不需要访问 GitHub）
+
+```bash
+base="https://gitee.com/lpzdinghai/linux-sandbox/releases/download/v0.5.3"
+name="linux-sandbox-0.5.3-linux-x86_64"
+
+curl -fL -o "$name.tar.gz"        "$base/$name.tar.gz"
+curl -fL -o "$name.tar.gz.sha256" "$base/$name.tar.gz.sha256"
+sha256sum -c "$name.tar.gz.sha256"          # 必须"成功"
+
+mkdir -p ~/.local && tar -xzf "$name.tar.gz" -C ~/.local
+~/.local/$name/install.sh
+export PATH="$HOME/.local/bin:$PATH"
+sandbox --version                            # sandbox 0.5.3
+```
+
+只要用 Python 那一层（`sandbox-ai`），也可以装 wheel——**先下载再安装**（Gitee 拒绝 pip 直接抓
+release URL，会返回 403）：
+
+```bash
+curl -fL -O "$base/linux_sandbox-0.5.3-py3-none-manylinux_2_38_x86_64.whl"
+pip install ./linux_sandbox-0.5.3-py3-none-manylinux_2_38_x86_64.whl
+```
+
+仓库地址：<https://gitee.com/lpzdinghai/linux-sandbox>（国内可达；CI 集成仍需 GitHub，`uses:` 只认 GitHub）。
+
 ### 预编译包
 
 ```bash
