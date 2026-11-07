@@ -227,6 +227,7 @@ process 诊断模式不读取整机数据冒充本次资源消耗。详见 [docs
 - 契约测试：`ctest --test-dir build -R ai_contracts`（或 `python -m unittest discover -s tests/unit/ai`，79 项）
 - 端到端自检：`bash tools/ai-check.sh`（契约 + 离线 demo + 指标断言）
 - 验证闭环演练：`bash tools/ai-verify-e2e.sh`（由操作者本人运行；真实隔离执行验证模板）
+- 价值证据（解释是否让下一次尝试更容易成功）：[docs/VALUE.md](docs/VALUE.md)
 - 安装与启动模式：[docs/INSTALL.md](docs/INSTALL.md) · 契约与版本：[docs/CONTRACT.md](docs/CONTRACT.md) · 威胁模型：[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 - 从 [使用与验证边界](docs/AI_ANALYSIS.md) 开始，模块说明见 [sandbox_ai](sandbox_ai/README.md)，
   已执行/未执行的验证记录见 [AI_VALIDATION.md](docs/AI_VALIDATION.md)。

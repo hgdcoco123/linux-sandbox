@@ -280,6 +280,20 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 `require_tool_once`（首轮 `tool_choice=required`），CLI 暴露为 `--require-proposal`；这正是
 "提示不如协议"的又一例。
 
+### 价值：解释对"下一次尝试"的作用（真机 + 真实模型）
+
+`tools/agent_loop_demo.py` 用**信息不对称**设计测这件事：期望值只在 `specs/*.txt` 里，被测程序读不到，
+只有分析层的证据能读到。三个条件（无反馈 / 完整 report / 结构化分析）× 两个 Agent（规则表 / qwen-plus）：
+
+| Agent | 无反馈 | 完整 report | 结构化分析 |
+|---|---|---|---|
+| 规则表 | 0/3 | 0/3 | **2/3** |
+| 真实模型 | 0/3 | 0/3 | **2/3** |
+
+规模：18 条 loop、50 次沙箱执行、10 次分析（10/10 通过校验）。关键点：规则表也能修好 → 进步来自
+**分析带出的事实**；完整 report 也修不好 → 沙箱负责"发生了什么"，分析层负责"缺什么"。细节与边界见
+[VALUE.md](VALUE.md)。
+
 ## 未验证
 
 - **诊断质量的普适性**：`qwen-plus` 三轮 1/4、1/4、0/4（引用拼接）；`qwen3.8-max` 3/4、结论 3/3 正确。
