@@ -48,6 +48,15 @@ with tempfile.TemporaryDirectory(prefix="sbxt-") as temp:
     report, directory = run(["/bin/sh", "-c", "printf hello; printf error >&2"])
     require((directory / "stdout.bin").read_bytes() == b"hello", "stdout")
     require((directory / "stderr.bin").read_bytes() == b"error", "stderr")
+    # The run hashes what it left on disk so a consumer can prove the bytes it cites.
+    import hashlib
+    checksums = json.loads((directory / "checksums.json").read_text())
+    require(checksums["algorithm"] == "sha256", checksums)
+    require(checksums["run_id"] == report["run_id"], checksums)
+    for name in ("result.json", "stdout.bin", "stderr.bin"):
+        digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+        require(checksums["files"][name]["sha256"] == digest, "checksum mismatch: " + name)
+        require(checksums["files"][name]["size"] == (directory / name).stat().st_size, checksums)
     report, _ = run(["/bin/sh", "-c", "exit 7"], "nonzero_exit")
     require(report["exit_code"] == 7, report)
     run(["/not-existing-program"], "startup_failure")

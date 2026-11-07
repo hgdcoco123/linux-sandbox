@@ -21,6 +21,9 @@ class RunStore {
     void report(const RunReport &);
     void owner_update(const Json &);
     void write_json(const std::string &name, const Json &);
+    // Hashes what the run left on disk so a consumer can prove the bytes it cites are
+    // the bytes this run wrote. Call after the last log flush, or internal.log will differ.
+    void checksums();
     static Json inspect(const fs::path &root, const std::string &id);
     static Json cleanup(const fs::path &root);
     static fs::path verified_run(const fs::path &root, const std::string &id);

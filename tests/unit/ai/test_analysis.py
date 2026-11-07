@@ -129,6 +129,67 @@ class EvidenceTests(Fixture):
         self.assertNotIn('secret-value', canonical(bundle.json()))
 
 
+class ProvenanceTests(unittest.TestCase):
+    def make(self, root, checksum_run='run-demo', tamper=False, drop=None):
+        import hashlib
+        run = root/'run'
+        run.mkdir()
+        report = dict(run_id='run-demo', summary='nonzero_exit', exit_code=1, errors=[],
+                      verdict='target_failed', isolated=True)
+        (run/'result.json').write_text(json.dumps(report))
+        (run/'stdout.bin').write_bytes(b'')
+        (run/'stderr.bin').write_bytes(b'undefined reference to calculate_total\n')
+        files = {}
+        for name in ('result.json', 'stdout.bin', 'stderr.bin'):
+            data = (run/name).read_bytes()
+            files[name] = dict(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+        if drop:
+            files.pop(drop, None)
+        (run/'checksums.json').write_text(json.dumps(dict(
+            schema_version=1, run_id=checksum_run, algorithm='sha256', files=files)))
+        if tamper:
+            (run/'stderr.bin').write_bytes(b'undefined reference to something_else\n')
+        return run
+
+    def test_matching_checksums_are_verified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = self.make(Path(temp))
+            bundle = collect('p', run)
+            self.assertEqual(bundle.provenance['status'], 'verified')
+            self.assertEqual(bundle.provenance['checked'], 3)
+            self.assertFalse([w for w in bundle.warnings if 'checksums' in w])
+
+    def test_a_modified_stream_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = self.make(Path(temp), tamper=True)
+            with self.assertRaisesRegex(AnalysisError, 'does not match its own checksums'):
+                collect('p', run)
+
+    def test_a_different_run_id_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = self.make(Path(temp), checksum_run='run-other')
+            with self.assertRaisesRegex(AnalysisError, 'but its report says'):
+                collect('p', run)
+
+    def test_missing_checksums_are_recorded_not_assumed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = self.make(root)
+            (run/'checksums.json').unlink()
+            bundle = collect('p', run)
+            self.assertEqual(bundle.provenance['status'], 'unverified')
+            self.assertTrue([w for w in bundle.warnings if 'provenance unverified' in w])
+
+    def test_a_missing_listed_file_is_partial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = self.make(root)
+            (run/'stdout.bin').unlink()
+            bundle = collect('p', run)
+            self.assertEqual(bundle.provenance['status'], 'partial')
+            self.assertIn('stdout.bin', bundle.provenance['missing'])
+
+
 class RetrievalCostTests(Fixture):
     def reference(self, store, query, limit=8):
         """The pre-optimisation scoring, kept here as the definition of correct."""

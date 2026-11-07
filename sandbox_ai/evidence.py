@@ -345,5 +345,88 @@ def collect(scope, run_dir, artifact_root=None, source_root=None, context=None):
     if rendered:
         reports += list(chunks(scope, run_id, 'report', 'result.json#summary', 'rendered key facts',
                                '\n'.join(rendered)))
+    provenance = verify_provenance(run_dir, run_id, warnings)
     return Bundle(scope, run_id, execution, (reports + items)[:MAX_EVIDENCE], warnings,
-                  str(run_dir))
+                  str(run_dir), provenance)
+
+
+def _sha256_file(root, name, limit=MAX_FILE):
+    """Hash one file of a run directory, refusing to follow a symlink."""
+    import hashlib
+    target = str(root / name)
+    if not hasattr(os, 'O_NOFOLLOW') and os.path.islink(target):
+        # Windows has no O_NOFOLLOW: refuse a symlink by inspection instead.
+        raise OSError('refusing to follow a symlink: ' + name)
+    fd = os.open(target, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                 | getattr(os, 'O_CLOEXEC', 0))
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        while True:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            total += len(block)
+            if total > limit:
+                raise AnalysisError('file is too large to verify: ' + name)
+            digest.update(block)
+    finally:
+        os.close(fd)
+    return digest.hexdigest(), total
+
+
+def verify_provenance(run_dir, run_id, warnings):
+    """Check the run's own checksums before trusting the bytes it left behind.
+
+    The bundle fingerprint only proves "nothing changed after import". Until now nothing
+    proved the directory was the run at all: edited streams would be cited as evidence and
+    every validator would pass. A run written by this version carries checksums.json; a
+    mismatch is refused, a missing file is a warning, and no checksums at all is recorded
+    as unverified rather than assumed valid.
+    """
+    import json as _json
+    provenance = {'status': 'unverified', 'checked': 0, 'mismatched': [], 'missing': []}
+    try:
+        raw, _ = read_file(run_dir, 'checksums.json', 65536)
+        manifest = _json.loads(raw[0][1])
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        warnings.append('checksums.json missing: evidence provenance unverified')
+        return provenance
+    except AnalysisError:
+        warnings.append('checksums.json unreadable: evidence provenance unverified')
+        return provenance
+    files = manifest.get('files') if isinstance(manifest, dict) else None
+    if not isinstance(files, dict) or manifest.get('algorithm') != 'sha256':
+        warnings.append('checksums.json is not understood: evidence provenance unverified')
+        return provenance
+    if manifest.get('run_id') not in (None, run_id):
+        raise AnalysisError('Run directory claims run ' + str(manifest.get('run_id')) +
+                            ' but its report says ' + run_id)
+    provenance['run_id'] = manifest.get('run_id')
+    for name, entry in sorted(files.items()):
+        expected = (entry or {}).get('sha256')
+        if not isinstance(expected, str):
+            continue
+        try:
+            digest, size = _sha256_file(run_dir, name)
+        except FileNotFoundError:
+            provenance['missing'].append(name)
+            continue
+        except (OSError, AnalysisError):
+            warnings.append(name + ': could not be verified')
+            provenance['missing'].append(name)
+            continue
+        provenance['checked'] += 1
+        if digest != expected:
+            provenance['mismatched'].append(name)
+        elif isinstance((entry or {}).get('size'), int) and entry['size'] != size:
+            provenance['mismatched'].append(name)
+    if provenance['mismatched']:
+        raise AnalysisError(
+            'Run directory does not match its own checksums: ' +
+            ', '.join(provenance['mismatched']) +
+            ' - the evidence was modified after the run finished')
+    if provenance['missing']:
+        warnings.append('checksums list files that are gone: ' + ', '.join(provenance['missing']))
+    provenance['status'] = 'verified' if provenance['checked'] and not provenance['missing'] else 'partial'
+    return provenance

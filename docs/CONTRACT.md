@@ -17,6 +17,7 @@
 | **稳定** | `cleanup{cgroup_removed,descendants_empty,launcher_reaped,errors[]}` | 清理是否完成 |
 | **稳定** | `workspace{export{attempted,ok,durable,error,bytes,entries,manifest,manifest_entries,manifest_truncated,manifest_error}, mode, limits}` | **`export.ok=false` 时不得视为成功**；`manifest` 指向运行目录下的 `artifact-manifest.json`（`path/type/size/sha256`，受 2048 条与 16 MiB 哈希预算限制，`manifest_truncated` 说明是否截断） |
 | **稳定** | `stop_reason`、`stdout/stderr{saved_bytes,discarded_bytes,eof,flushed,write_error}` | 输出是否被截断/丢弃 |
+| **稳定** | 运行目录里的 `checksums.json`：`{schema_version, run_id, algorithm:"sha256", files:{name:{sha256,size}}}`，覆盖 `result.json`/`config.json`/`stdout.bin`/`stderr.bin`/`internal.log` | 下游可自证"我引用的字节就是这次运行写下的字节"；AI 层导入时校验，不匹配即拒绝 |
 | **实验** | `metrics.*`（`cpu.stat`、`memory.*`、`pids.*`、`sampling.history`） | 字段会随内核版本变化；不要据此做硬判定 |
 | **诊断** | `internal.log` 的文本格式、`security{policy,version}` | 供人读；解析请以 report 字段为准 |
 

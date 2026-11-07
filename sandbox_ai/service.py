@@ -360,6 +360,7 @@ class Analyzer:
                       scope=scope, run_id=run_id, session_id=session_id, question=question,
                       provider=self.provider.identity, prompt_version=PROMPT_VERSION,
                       evidence_fingerprint=bundle.fingerprint, execution=bundle.execution,
+                      provenance=bundle.provenance,
                       status='failed', cached=False, analysis=None, audit=[], proposals=[],
                       warnings=bundle.warnings + retrieval_warnings, started_at=time.time())
         tool_count = 0

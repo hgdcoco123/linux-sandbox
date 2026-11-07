@@ -867,6 +867,18 @@ void RunSession::finalize() {
         logger_->info("finished: {} ({})", report_.summary, verdict_name(verdict_of(result)));
         logger_->flush();
     }
+    // After the last log line: internal.log is part of what gets hashed.
+    if (store_) {
+        try {
+            store_->checksums();
+        } catch (const std::exception &failure) {
+            report_.cleanup_errors.push_back(std::string("checksums: ") + failure.what());
+            try {
+                store_->report(report_);
+            } catch (...) {
+            }
+        }
+    }
 }
 
 RunReport RunSession::run() {

@@ -48,6 +48,10 @@ class Bundle:
     # stream (stdout/stderr/internal log) can be offered later as a tool; empty for
     # bundles imported before the field existed, which simply disables that tool.
     run_dir: str = ''
+    # What the run directory said about its own bytes: verified / unverified / mismatch.
+    # Derived from the run's checksums.json, so it is provenance rather than evidence and
+    # deliberately stays out of the fingerprint.
+    provenance: dict = field(default_factory=dict)
 
     @property
     def fingerprint(self):
@@ -56,7 +60,7 @@ class Bundle:
     def json(self):
         return dict(schema_version=2, scope=self.scope, run_id=self.run_id,
                     execution=self.execution, evidence=[e.json() for e in self.evidence],
-                    warnings=self.warnings, run_dir=self.run_dir)
+                    warnings=self.warnings, run_dir=self.run_dir, provenance=self.provenance)
 
     @classmethod
     def load(cls, value):
@@ -65,4 +69,4 @@ class Bundle:
             raise AnalysisError('Unsupported evidence schema')
         return cls(value['scope'], value['run_id'], value['execution'],
                    [Evidence(**item) for item in value['evidence']], value['warnings'],
-                   value.get('run_dir', ''))
+                   value.get('run_dir', ''), value.get('provenance', {}))

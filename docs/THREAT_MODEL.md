@@ -44,6 +44,7 @@
 | 产物未交付时**不报成功** | `workspace.export.ok=false` → 判定失败并说明原因 | `tests/acceptance/isolation.py`（"a refused export is reported, not passed off as success"） |
 | 产物原子替换、不会半新半旧 | `renameat2(RENAME_EXCHANGE)` + 父目录 `fsync`，跨文件系统时 copy-then-exchange | `tests/integration/publish_tests.cpp` |
 | 配额被打满时仍交付已写部分 | 导出在停止前完成，`workspace` 字段记录字节/条目 | `tests/acceptance/isolation.py`（over-quota 用例） |
+| 运行结束后证据被篡改 | 运行目录写 `checksums.json`（五个文件的 sha256）；AI 层导入时逐一校验，不匹配即拒绝 | `tests/integration/integration.py`（校验和与磁盘一致）、`tests/unit/ai/test_analysis.py`（篡改即拒收、缺文件记 partial、无校验和记 unverified） |
 | 控制通道的 fd 不泄漏给目标 | init 只把 stdin/stdout/stderr 传下去，其余 `CLOEXEC` | `tests/integration/control_fd_tests.cpp`、`tests/integration/session_runtime_tests.cpp` |
 | 会话关闭期间的通道异常不会被误报成成功 | 关闭后迟到回执按序号丢弃、通道作废 | `tests/integration/sessions.py`、`tests/unit/ai`（宿主侧不依赖通道文本） |
 

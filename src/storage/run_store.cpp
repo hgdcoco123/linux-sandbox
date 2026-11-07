@@ -2,7 +2,9 @@
 #include "sandbox/core/ops_json.hpp"
 #include "sandbox/storage/session_store.hpp"
 #include "sandbox/runtime/session_wire.hpp"
+#include "sandbox/storage/sha256.hpp"
 #include "sandbox/storage/store.hpp"
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -92,6 +94,38 @@ void RunStore::write_json(const std::string &name, const Json &value) {
     }
     checked(::fsync(directory_fd_.get()), "fsync state dir");
 }
+void RunStore::checksums() {
+    Json files = Json::object();
+    for (const auto *name : {"result.json", "config.json", "stdout.bin", "stderr.bin",
+                             "internal.log"}) {
+        auto raw = ::openat(directory_fd_.get(), name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (raw < 0) {
+            if (errno == ENOENT)
+                continue; // not every run has every stream; absence is not a failure
+            system_error(std::string("open for checksum: ") + name);
+        }
+        UniqueFd file(raw);
+        Sha256 digest;
+        std::uint64_t size = 0;
+        std::array<char, 65536> buf{};
+        for (;;) {
+            auto n = ::read(file.get(), buf.data(), buf.size());
+            if (n < 0 && errno == EINTR)
+                continue;
+            checked(static_cast<int>(n), std::string("read for checksum: ") + name);
+            if (!n)
+                break;
+            size += static_cast<std::uint64_t>(n);
+            digest.update(std::string_view(buf.data(), static_cast<std::size_t>(n)));
+        }
+        files[name] = Json{{"sha256", digest.hex()}, {"size", size}};
+    }
+    write_json("checksums.json", Json{{"schema_version", 1},
+                                      {"run_id", id_},
+                                      {"algorithm", "sha256"},
+                                      {"files", files}});
+}
+
 void RunStore::state(RunState s, const Json &extra) {
     Json j = {{"schema_version", 1},
               {"run_id", id_},

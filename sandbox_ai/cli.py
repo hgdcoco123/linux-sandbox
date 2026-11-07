@@ -234,7 +234,8 @@ def main(argv=None):
         if args.command == 'import':
             bundle = collect(args.scope, args.run_dir, args.artifacts, args.sources, args.context)
             store.put_bundle(bundle, force=getattr(args, 'reimport', False))
-            result = dict(run_id=bundle.run_id, evidence_count=len(bundle.evidence), warnings=bundle.warnings)
+            result = dict(run_id=bundle.run_id, evidence_count=len(bundle.evidence),
+                          warnings=bundle.warnings, provenance=bundle.provenance)
         elif args.command == 'index':
             count = store.embed(args.scope, provider(args)) if args.semantic else len(store.corpus(args.scope))
             result = dict(chunks=count, mode='semantic' if args.semantic else 'lexical')
