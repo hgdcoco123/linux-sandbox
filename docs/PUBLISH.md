@@ -146,6 +146,38 @@ sandbox --version
 - wheel 的 tag 是 `linux_x86_64`，pip 只在 Linux x86_64 上装；其他架构会被正确地拒绝而不是装完才发现不能跑；
 - 二进制仍要求 glibc ≥ 2.38（构建于 Ubuntu 24.04），与 tarball 一致。
 
+## 6.6 镜像到 Gitee（国内可达）
+
+Gitee 能解决"能看源码、能下 release 包"，但**不能**替代 GitHub Action——`uses:` 只认 GitHub。
+其余（源码、文档、release 附件、校验和）完全一样。
+
+```bash
+bash tools/mirror_to_gitee.sh --remote git@gitee.com:<you>/linux-sandbox.git --dry-run
+bash tools/mirror_to_gitee.sh --remote git@gitee.com:<you>/linux-sandbox.git
+```
+
+不带 `--token` 时，脚本只推分支和 tag，并打印在网页上建 release 的步骤（附件用
+`dist/linux-sandbox-<ver>-linux-x86_64.tar.gz` 与 `.sha256`）。
+
+带 token 则通过 Gitee API 建 release 并上传附件：
+
+```bash
+# 令牌在 https://gitee.com/profile/personal_access_tokens 生成，勾选 projects
+bash tools/mirror_to_gitee.sh --remote git@gitee.com:<you>/linux-sandbox.git \
+  --token <GITEE_TOKEN> --release v0.5.3
+```
+
+几个需要知道的差异：
+
+| 项 | GitHub | Gitee |
+|---|---|---|
+| `uses: owner/repo@tag` | 支持 | 不支持（这是 GitHub 的功能） |
+| Release 附件 | 支持 | 支持，但单文件/总量有账号级限制（本包 2.2 MB，远低于任何限制） |
+| 公开仓库 | 直接可建 | 部分账号需要先实名认证 |
+| 原始文件直链 | `raw.githubusercontent.com` | `gitee.com/<slug>/raw/<ref>/<path>`（国内可达） |
+
+发布后把 Gitee 的 release 链接补进 README 的安装说明，让国内用户有第二条路。
+
 ## 7. 常见失败
 
 | 现象 | 原因 | 处理 |
