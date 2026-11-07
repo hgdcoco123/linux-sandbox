@@ -28,6 +28,9 @@ jobs:
           command: /usr/bin/sandbox-fixture proc-view
           timeout-ms: '3000'
           explain: 'false'
+          # Hosted runners often do not delegate cpu/memory/pids to a user unit; this keeps the
+          # action's own plumbing (report, outputs, fail-on) under test on any runner.
+          allow-process: 'true'
         # Runners that restrict unprivileged user namespaces cannot isolate; the action says so
         # instead of pretending. Fail the step only when it did not even fall back.
         continue-on-error: false

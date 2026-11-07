@@ -138,6 +138,11 @@ runs:
         status=$?
         set -e
         cat sandbox-run.err >&2 || true
+        if [ -s sandbox-run.err ]; then
+          # Surface the reason in the run summary too: a refusal that only exists in the log
+          # is invisible to whoever reads the check.
+          echo "::error title=sandbox::$(head -1 sandbox-run.err)"
+        fi
         {
           echo '```'
           cat sandbox-run.txt || true

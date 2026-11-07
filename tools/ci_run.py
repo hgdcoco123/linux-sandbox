@@ -58,10 +58,12 @@ def main(argv=None):
     if diagnostic.returncode == 0 and diagnostic.stdout.strip():
         probe = (json.loads(diagnostic.stdout).get('isolation_probe') or {})
     runs = None
+    why = ''
     try:
         runs = prepare_delegated_cgroup()
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError) as error:
         runs = None
+        why = str(error)  # the precise reason, instead of a bare "not delegated"
     # A delegated cgroup is necessary but not sufficient: unprivileged namespaces can be
     # restricted independently, and the run then fails deep inside with a host error.
     blocked = bool(probe) and not probe.get('available', False)
@@ -80,7 +82,7 @@ def main(argv=None):
             reason = (' (environment: isolation unavailable at stage ' + str(probe.get('stage')) +
                       ': ' + str(probe.get('error', 'unknown')) + ')')
         elif runs is None:
-            reason = ' (this process was not delegated a cgroup)'
+            reason = ' (' + (why or 'this process was not delegated a cgroup') + ')'
         print('cannot run isolated' + reason + ': run this step inside '
               '`systemd-run --user -p Delegate=yes`, or pass --allow-process to accept the '
               'diagnostic backend', file=sys.stderr)
