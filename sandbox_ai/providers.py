@@ -130,13 +130,18 @@ class CompatibleProvider:
                 self._thread.join(timeout=0.2)
                 self._thread = None
 
-    def complete(self, messages, tools, force_tool=False):
+    def complete(self, messages, tools, force_tool=False, force_tool_name=None):
         payload = dict(model=self.model, messages=messages, temperature=0,
                        max_tokens=self.max_tokens)
         if tools:
-            payload.update(tools=tools,
-                           tool_choice='required' if force_tool else 'auto',
-                           parallel_tool_calls=False)
+            tool_choice = 'auto'
+            if force_tool_name:
+                # Naming the function is stronger than "call something": the caller wants a
+                # proposal, not the first tool the model happens to pick.
+                tool_choice = dict(type='function', function=dict(name=force_tool_name))
+            elif force_tool:
+                tool_choice = 'required'
+            payload.update(tools=tools, tool_choice=tool_choice, parallel_tool_calls=False)
         response = self.post('/chat/completions', payload)
         try:
             choice = response['choices'][0]
@@ -212,7 +217,7 @@ class DemoProvider:
     identity = 'offline-demo-v1'
     usage = ()
 
-    def complete(self, messages, tools, force_tool=False):
+    def complete(self, messages, tools, force_tool=False, force_tool_name=None):
         initial = json.loads(messages[1]['content'])
         if tools and not any(m['role'] == 'tool' for m in messages):
             return dict(role='assistant', content=None, tool_calls=[dict(id='demo-search', type='function',

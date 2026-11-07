@@ -1,6 +1,6 @@
 # AI 分析层验证记录
 
-> **一句话**：Linux 上 87 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
+> **一句话**：Linux 上 90 项契约测试、CTest 34/34、`ai-check`、真机验证闭环（7 条必检行）全部通过；
 > 真实模型在同一批 4 条用例上从 1/4 走到 **4/4**（靠契约演进，不是换模型）；**未验证**：泛化评测
 > （无 held-out 用例）、引用的语义充分性（只验来源真实）、以及"提案→执行→回问"两轮链路在真实模型下的表现。
 
@@ -13,8 +13,8 @@
 ```text
 python3 -m unittest discover -s tests/unit/ai -v
 ```
-结果：**87 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 8 /
-`test_verification.py` 7 / `test_e2e_driver.py` 5 / `test_finish.py` 19）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
+结果：**90 项全部通过**（按文件计 `test_analysis.py` 29 / `test_links.py` 19 / `test_transport.py` 9 /
+`test_verification.py` 7 / `test_e2e_driver.py` 5 / `test_finish.py` 21）。Windows 上符号链接用例会跳过（系统不允许普通用户创建），Linux 上全部执行。
 
 同一套测试已注册进 CTest：
 
@@ -25,7 +25,7 @@ ctest --test-dir build
 `ai_contracts` 作为第 34 个测试运行并通过（`100% tests passed, 0 tests failed out of 34`；
 `isolation_integration` 在无 systemd 委派时跳过）。
 
-`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 87 项契约测试、跑离线 demo 并断言
+`tools/ai-check.sh` 在任意 Python 3 主机上串起三件事：跑完 90 项契约测试、跑离线 demo 并断言
 三次分析均为 `completed`、再用 `stats` 断言 `structured_output_rate == 1.0` 与 `tool_denied == 0`。
 输出末行为 `AI CHECK PASSED: contracts, demo and aggregate metrics`。
 
@@ -225,7 +225,7 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 | 慢调用无反馈 | 阻塞请求期间 5 秒一次心跳，`--quiet` 关闭；非 TTY 不打印 | 由 `providers._tick` 覆盖（不写测试，避免睡 5 秒） |
 | 无重试 | 429/5xx/超时重试 ≤2 次，尊重 `Retry-After`（上限 5 秒）；400 等不重试 | `test_finish.Retry` 3 条 |
 
-**Linux 复验（已完成）**：`87` 项契约测试全过、`CTest 34/34`、`ai-check` 通过、演练 `7/7` 必检行、
+**Linux 复验（已完成）**：`90` 项契约测试全过、`CTest 34/34`、`ai-check` 通过、演练 `7/7` 必检行、
 `verify.sh` 输出 `ALL TESTS PASSED`。复验过程中抓到并修掉三个只在 Linux 暴露的问题：
 
 1. `test_e2e_driver` 缺 `from unittest.mock import patch`（Windows 上被 `skipIf(posix)` 掩盖）；
@@ -251,6 +251,9 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 | 一条假设只记第一条验证运行 | `hypothesis_updates` 记录 `run_ids` 列表；唯一索引 (scope,statement,status,run_id) 去重 | 由 `HypothesisUpdates` 覆盖 |
 | 假设历史按 scope 取，混入无关工作 | 改为按本次会话涉及的验证运行过滤 | 同上 |
 | `failure_reasons` 把本地超时算成 transport | 独立 `deadline` 桶 | — |
+| 老库有重复假设行时，建唯一索引会让整个库打不开 | 建索引前先去重；老库测试覆盖 | `LegacyDatabase` |
+| `--self-check` 的 token/耗时没进报告 | 自检移到统计之前；指标改名 `self_check` 并标 `judge=model` | `Accounting` |
+| `--require-proposal` 只要求"任意工具" | 改为按名强制 `propose_verification`，参数改名 `require_proposal` | `test_transport` |
 | 缓存键含全部证据 id | 改用 `corpus_version()`（代际） | — |
 
 ### Held-out 与两轮闭环（真机 + 真实模型，已执行）

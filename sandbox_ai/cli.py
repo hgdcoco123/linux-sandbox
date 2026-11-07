@@ -22,6 +22,8 @@ def _progress(message):
 
 def provider(args):
     if args.provider == 'demo':
+        if getattr(args, 'require_proposal', False):
+            raise AnalysisError('Demo cannot propose: it has no registration to choose from')
         if args.semantic or getattr(args, 'rerank', False):
             raise AnalysisError('Demo does not simulate embeddings or a reranker; use a real provider')
         return DemoProvider()
@@ -242,7 +244,7 @@ def main(argv=None):
             engine = Analyzer(store, provider(args), semantic=args.semantic,
                               reranker=provider(args) if args.rerank else None,
                               self_check=args.self_check,
-                              require_tool_once=args.require_proposal,
+                              require_proposal=args.require_proposal,
                               templates=Templates(args.templates) if args.templates else None)
             result = engine.analyze(args.scope, args.run_id, args.question, args.session, args.refresh)
         elif args.command == 'explain':

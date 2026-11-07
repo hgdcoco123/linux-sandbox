@@ -133,7 +133,7 @@ def two_turn_loop(store, provider, args, work):
     bundle = collect('twoturn', analysed[0], context='演练产生的真实隔离运行。')
     store.put_bundle(bundle)
     templates = Templates(drill/'templates'/'templates.json')
-    first = Analyzer(store, provider, templates=templates, require_tool_once=True).analyze(
+    first = Analyzer(store, provider, templates=templates, require_proposal=True).analyze(
         'twoturn', bundle.run_id,
         '这次运行为什么失败？如果可以用登记的检查确认，请先调用 propose_verification '
         '选择一个模板，再给出分析。')

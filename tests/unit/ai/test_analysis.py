@@ -22,7 +22,7 @@ class ScriptedProvider:
         self.usage = []
         self.calls = []
 
-    def complete(self, messages, tools, force_tool=False):
+    def complete(self, messages, tools, force_tool=False, force_tool_name=None):
         self.calls.append(copy.deepcopy(messages))
         if not self.replies:
             raise AssertionError('Unexpected model call')

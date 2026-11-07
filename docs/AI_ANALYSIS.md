@@ -132,7 +132,7 @@ embedding模型变更或重新导入后重新index。向量失败时分析会明
 usage记录服务商实际返回的用量，未返回时不估造token数。
 
 证据给模型时每行带 `L12| ` 前缀，行号是可见标签、不需要数；引用只回行号。`stats` 另给出 `failure_reasons`（deadline / transport / citation / schema / budget）分布。
-可选 `--self-check` 会在分析完成后追问模型一次："每条引用是否真的支持该主张"，结果只记进 `metrics.citation_support`（supported / unsupported / unclear），**不改变**校验结果或状态——它用来区分"引用真实"和"引用足够"。检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
+可选 `--require-proposal` 让首轮 `tool_choice` 指向 `propose_verification`（不是"任意工具"），因为真实模型不会仅凭提示就主动调工具。可选 `--self-check` 会在分析完成后追问模型一次："每条引用是否真的支持该主张"，结果只记进 `metrics.self_check`（supported / unsupported / unclear，并标注 `judge=model`），**不改变**校验结果或状态——它用来区分"引用真实"和"引用足够"。检索是两阶段：先 BM25（可选、加向量后）RRF 融合取回候选，若启用 `--rerank`
 （`SANDBOX_AI_RERANK_MODEL`）再调 `/rerank` 精排；精排失败**降级保留融合顺序**并写进 `warnings`，
 `metrics.reranked` 为 false，`metrics.retrieval` 标记为不含 `+rerank`。
 

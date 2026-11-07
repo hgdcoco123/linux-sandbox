@@ -39,7 +39,7 @@ class Reply:
         self.usage = []
         self.calls = []
 
-    def complete(self, messages, tools, force_tool=False):
+    def complete(self, messages, tools, force_tool=False, force_tool_name=None):
         self.calls.append(json.loads(messages[1]['content']))
         value = self.replies.pop(0)
         return value(messages) if callable(value) else value

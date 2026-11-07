@@ -189,7 +189,7 @@ def validate_analysis(value, seen, resolved=None):
 class Analyzer:
     def __init__(self, store, provider, semantic=False, templates=None, max_calls=6,
                  max_tools=4, max_context_chars=48000, deadline_seconds=180, reranker=None,
-                 self_check=False, require_tool_once=False):
+                 self_check=False, require_proposal=False):
         if not 1 <= max_calls <= 10 or not 0 <= max_tools <= 8:
             raise AnalysisError('Invalid model/tool call budget')
         self.store, self.provider = store, provider
@@ -199,7 +199,7 @@ class Analyzer:
         self.self_check = self_check
         # A real model does not reliably call a tool just because the question mentions one;
         # when the caller wants a proposal, the first turn is forced to produce a tool call.
-        self.require_tool_once = require_tool_once
+        self.require_proposal = require_proposal
 
     def judge(self, analysis, seen):
         """Ask the model whether each cited line, alone, supports its claim.
@@ -339,7 +339,8 @@ class Analyzer:
                 allowed = TOOLS[:2] + (TOOLS[2:] if self.templates else [])
                 message = self.provider.complete(
                     messages, allowed if tool_count < self.max_tools else [],
-                    force_tool=(self.require_tool_once and number == 0 and tool_count < self.max_tools))
+                    force_tool=(self.require_proposal and number == 0 and tool_count < self.max_tools),
+                    force_tool_name='propose_verification' if self.require_proposal else None)
                 if time.monotonic() - started >= self.deadline:
                     raise AnalysisError('Analysis deadline exceeded')
                 if not isinstance(message, dict) or len(canonical(message)) > 20000:
@@ -407,6 +408,10 @@ class Analyzer:
         except (AnalysisError, TimeoutError) as error:
             result['error'] = str(error)
         result['evidence'] = list(seen.values())
+        # The self-check is another model call: run it before the accounting, or its tokens
+        # and seconds are silently missing from the report.
+        if self.self_check:
+            support = self.judge(result['analysis'] or {}, seen)
         result['usage'] = list(self.provider.usage[usage_start:])
         result['elapsed_seconds'] = round(time.monotonic()-started, 3)
         # The five capabilities each leave a number here, so a reviewer can measure them
@@ -431,7 +436,8 @@ class Analyzer:
             cache_hit=False)
         settled = (result['analysis'] or {}).get('hypothesis_updates') or []
         if self.self_check:
-            result['metrics']['citation_support'] = self.judge(result['analysis'] or {}, seen)
+            result['metrics']['self_check'] = dict(support, judge='model', 
+                                                  note='a model opinion, not a verdict')
         result['metrics']['hypothesis_updates'] = {
             status: sum(1 for update in settled if update['status'] == status)
             for status in ('supported', 'refuted', 'unknown')}

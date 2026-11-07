@@ -14,7 +14,7 @@ from sandbox_ai.models import AnalysisError
 from sandbox_ai.providers import CompatibleProvider
 from sandbox_ai.service import Analyzer, validate_analysis
 from sandbox_ai.store import Store
-from sandbox_ai.evidence import chunks, spans, prefix_lines, strip_line_prefix
+from sandbox_ai.evidence import chunks, line_reference, spans, prefix_lines, strip_line_prefix
 from sandbox_ai.verification import Templates, substitute
 
 
@@ -220,7 +220,7 @@ class SelfCheck(unittest.TestCase):
         class Provider:
             identity = 'self-check'
             usage = []
-            def complete(self, messages, tools, force_tool=False):
+            def complete(self, messages, tools, force_tool=False, force_tool_name=None):
                 return dict(role='assistant', content=json.dumps(dict(verdicts=verdicts)))
         return Provider()
 
@@ -235,6 +235,72 @@ class SelfCheck(unittest.TestCase):
         bad = Analyzer(store=None, provider=model_bad, self_check=True).judge(self.analysis(), seen)
         self.assertIn('error', bad)
         self.assertEqual(bad['checked'], 1)
+
+
+class LegacyDatabase(unittest.TestCase):
+    def test_a_database_with_duplicate_hypotheses_still_opens(self):
+        # The unique index arrived after the table did; an older file must not become
+        # unreadable just because it holds duplicates.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'old.db'
+            db = sqlite3.connect(path)
+            db.executescript('''
+              CREATE TABLE hypothesis_status(scope TEXT, statement TEXT, status TEXT,
+                run_id TEXT, analysis_id TEXT, body TEXT);
+            ''')
+            db.executemany('INSERT INTO hypothesis_status VALUES(?,?,?,?,?,?)',
+                           [('p', 'H', 'supported', 'run-1', 'a', '{}'),
+                            ('p', 'H', 'supported', 'run-1', 'b', '{}')])
+            db.commit()
+            db.close()
+            store = Store(path)
+            try:
+                rows = store.db.execute('SELECT COUNT(*) FROM hypothesis_status').fetchone()[0]
+                self.assertEqual(rows, 1, 'duplicates were not collapsed before the index')
+                history = store.hypothesis_history('p')
+                self.assertEqual(len(history), 1)
+            finally:
+                store.close()
+
+
+class Accounting(unittest.TestCase):
+    def test_self_check_tokens_and_seconds_are_counted(self):
+        class Provider:
+            identity = 'accounting'
+            def __init__(self):
+                self.usage = []
+            def complete(self, messages, tools, force_tool=False, force_tool_name=None):
+                self.usage.append({'total_tokens': 10})
+                if 'judge' in (messages[0].get('content') or ''):
+                    return dict(role='assistant', content=json.dumps({'verdicts': ['yes']}))
+                item = json.loads(messages[1]['content'])['evidence'][0]
+                return dict(role='assistant', content=json.dumps(dict(
+                    summary='s', facts=[dict(statement='the target exited 7',
+                                             citations=[line_reference(item)])],
+                    hypotheses=[], missing_info=[], next_steps=[])))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root/'run'
+            run.mkdir()
+            (run/'result.json').write_text(json.dumps(dict(run_id='run-a', summary='nonzero_exit', errors=[])))
+            (run/'stdout.bin').write_bytes(b'')
+            (run/'stderr.bin').write_bytes(b'exit code 7\n')
+            from sandbox_ai.evidence import collect
+            store = Store(root/'s.db')
+            try:
+                bundle = collect('p', run)
+                store.put_bundle(bundle)
+                provider = Provider()
+                result = Analyzer(store, provider, self_check=True).analyze(
+                    'p', bundle.run_id, 'why?')
+                self.assertEqual(result['status'], 'completed')
+                # two calls: the answer and the judge; both must appear in the report
+                self.assertEqual(len(result['usage']), 2)
+                self.assertEqual(result['metrics']['self_check']['supported'], 1)
+                self.assertEqual(result['metrics']['self_check']['judge'], 'model')
+            finally:
+                store.close()
 
 
 class TemplatesGuard(unittest.TestCase):

@@ -52,8 +52,20 @@ class Store:
           CREATE TABLE IF NOT EXISTS hypothesis_status(scope TEXT, statement TEXT, status TEXT,
             run_id TEXT, analysis_id TEXT, body TEXT);
           CREATE INDEX IF NOT EXISTS hypothesis_scope ON hypothesis_status(scope);
-          CREATE UNIQUE INDEX IF NOT EXISTS hypothesis_unique ON hypothesis_status(scope,statement,status,run_id);
         ''')
+        # A database written before this index existed may hold duplicate rows, and creating a
+        # UNIQUE index over them raises - which would make the whole library fail to open an
+        # older file. Collapse the duplicates first, then add the constraint.
+        try:
+            self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS hypothesis_unique '
+                            'ON hypothesis_status(scope,statement,status,run_id)')
+        except sqlite3.IntegrityError:
+            with self.db:
+                self.db.execute('DELETE FROM hypothesis_status WHERE rowid NOT IN '
+                                '(SELECT MIN(rowid) FROM hypothesis_status '
+                                'GROUP BY scope,statement,status,run_id)')
+            self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS hypothesis_unique '
+                            'ON hypothesis_status(scope,statement,status,run_id)')
 
     def close(self):
         self.db.close()
