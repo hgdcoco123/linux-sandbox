@@ -17,11 +17,20 @@ arch=$(uname -m)
 name="linux-sandbox-$version-linux-$arch"
 stage="$root/dist/$name"
 
-[ -x build/sandbox ] || fail "build first: cmake -S . -B build && cmake --build build"
+build_dir="${SBX_BUILD_DIR:-$root/build}"
+[ -x "$build_dir/sandbox" ] || fail "build first: cmake -S . -B build && cmake --build build"
 rm -rf "$stage"
 mkdir -p "$stage" || fail "cannot create $stage"
 
-bash tools/install.sh --prefix "$stage" >/dev/null || fail "staging install failed"
+SBX_BUILD_DIR="$build_dir" bash tools/install.sh --prefix "$stage" >/dev/null || fail "staging install failed"
+
+# A tarball that needs libprotobuf.so.32 and libseccomp.so.2 breaks on the next distro. Report
+# the truth about the binaries being shipped instead of leaving it to the first user.
+external=$(ldd "$build_dir/sandbox" 2>/dev/null | grep -E "libprotobuf|libseccomp" | awk "{print \$1}" | tr "\n" " ")
+if [ -n "$external" ]; then
+    echo "note: these binaries need system libraries: $external" >&2
+    echo "      for a portable tarball rebuild with -DSANDBOX_STATIC_DEPS=ON" >&2
+fi
 
 # Documentation and licence travel with the binaries: a tarball without them is not usable.
 install -m 0644 LICENSE CHANGELOG.md README.md "$stage/" || fail "copying top-level docs"

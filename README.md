@@ -50,9 +50,9 @@ exit:       0 (0 means success)
 ### 预编译包
 
 ```bash
-curl -LO https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.0/linux-sandbox-0.5.0-linux-x86_64.tar.gz
-tar -xzf linux-sandbox-0.5.0-linux-x86_64.tar.gz -C /opt
-export PATH="/opt/linux-sandbox-0.5.0-linux-x86_64/bin:$PATH"
+curl -LO https://github.com/hgdcoco123/linux-sandbox/releases/download/v0.5.1/linux-sandbox-0.5.1-linux-x86_64.tar.gz
+tar -xzf linux-sandbox-0.5.1-linux-x86_64.tar.gz -C /opt
+export PATH="/opt/linux-sandbox-0.5.1-linux-x86_64/bin:$PATH"
 
 sandbox doctor              # 报告这台机器支持哪种启动模式
 ```

@@ -40,6 +40,12 @@ export PATH="/opt/linux-sandbox-<ver>-linux-<arch>/bin:$PATH"
 包内是自洽的：`bin/`（两个二进制 + `sandbox-ai`）、`share/linux-sandbox/`（SDK、辅助脚本、分析层）、
 `docs/`、`LICENSE`。解包即可用，`sandbox-ai` 会按自身位置找到 Python 包。
 
+**运行时依赖**：发布用的 tarball 以 `-DSANDBOX_STATIC_DEPS=ON` 构建，把 libseccomp 与 protobuf
+静态链接进去，因此只依赖 glibc / libstdc++ / libgcc / libm（任何发行版都有）。
+如果自己构建时没加这个选项，二进制会需要 `libseccomp.so.2` 与 `libprotobuf.so.32`
+（Debian/Ubuntu 上分别是 `libseccomp2`、`libprotobuf32`/`libprotobuf32t64`，且 soname 必须匹配）。
+`tools/pack.sh` 会在打包时把实际依赖打印出来。
+
 ## 3. 三种启动模式
 
 判定顺序：**systemd 用户委派 → 显式 `cgroup_root` → `process` 诊断模式**。

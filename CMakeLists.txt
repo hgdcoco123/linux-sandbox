@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(linux_sandbox VERSION 0.5.0 LANGUAGES CXX)
+project(linux_sandbox VERSION 0.5.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -93,8 +93,19 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   return()
 endif()
 find_package(Threads REQUIRED)
+# A release tarball should run on any glibc system, not only where libprotobuf and libseccomp
+# happen to be installed at matching sonames. Turning this on links both statically; what stays
+# dynamic is only libc/libstdc++/libgcc/libm, which every Linux has.
+option(SANDBOX_STATIC_DEPS "Link libseccomp and protobuf statically (portable binary)" OFF)
+if(SANDBOX_STATIC_DEPS)
+  set(Protobuf_USE_STATIC_LIBS ON)
+endif()
 find_path(SECCOMP_INCLUDE_DIR seccomp.h REQUIRED)
-find_library(SECCOMP_LIBRARY seccomp REQUIRED)
+if(SANDBOX_STATIC_DEPS)
+  find_library(SECCOMP_LIBRARY NAMES libseccomp.a seccomp REQUIRED)
+else()
+  find_library(SECCOMP_LIBRARY seccomp REQUIRED)
+endif()
 find_package(Protobuf 3.21 REQUIRED)
 protobuf_generate_cpp(SESSION_PROTO_SOURCES SESSION_PROTO_HEADERS proto/session_v1.proto)
 add_library(sandbox_runtime

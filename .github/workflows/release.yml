@@ -30,7 +30,9 @@ jobs:
 
       - name: Build and test the tag that will ship
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          # Static protobuf and libseccomp: the tarball then runs anywhere with glibc instead of
+          # only on distributions that ship matching sonames.
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSANDBOX_STATIC_DEPS=ON
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
 

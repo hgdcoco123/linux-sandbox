@@ -20,8 +20,9 @@ done
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-binary="$root/build/sandbox"
-launcher="$root/build/sandbox-launcher"
+build_dir="${SBX_BUILD_DIR:-$root/build}"
+binary="$build_dir/sandbox"
+launcher="$build_dir/sandbox-launcher"
 [ -x "$binary" ] || fail "no $binary: build first (cmake --build build)"
 [ -x "$launcher" ] || fail "no $launcher: build first"
 [ -w "$prefix" ] || [ -w "$(dirname "$prefix")" ] || fail "cannot write to $prefix"

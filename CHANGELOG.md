@@ -2,6 +2,14 @@
 
 版本号来自 `CMakeLists.txt` 的 `project(... VERSION)`；`sandbox --version` 打的是同一个值。
 
+## 0.5.1
+
+- 预编译包改为静态链接 libseccomp 与 protobuf（`-DSANDBOX_STATIC_DEPS=ON`）：二进制只依赖
+  glibc / libstdc++ / libgcc / libm，解包即可运行，不再需要系统提供 `libprotobuf.so.32` 与
+  `libseccomp.so.2`。发布 workflow 使用该选项构建。
+- `tools/pack.sh` 打印实际动态依赖；`tools/install.sh` 与 `tools/pack.sh` 支持 `SBX_BUILD_DIR`。
+- 功能、报告格式与字段语义与 0.5.0 一致。
+
 ## 0.5.0
 
 沙箱本体
