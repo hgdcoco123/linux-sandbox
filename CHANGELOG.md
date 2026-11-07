@@ -2,6 +2,14 @@
 
 版本号来自 `CMakeLists.txt` 的 `project(... VERSION)`；`sandbox --version` 打的是同一个值。
 
+## 0.5.3
+
+- 安装器同时链接 `sbx`：Ubuntu 的 `policycoreutils-python-utils`（SELinux）也提供一个叫 `sandbox` 的命令，
+  同名会让人误装别的包；`sbx` 与 `sandbox` 是同一份二进制。
+- `docs/THREAT_MODEL.md` 新增 4.1：AppArmor 阻塞 → `doctor` 的 `remedy` → 只放行本 launcher 的 profile，
+  作为"只报 stage 是未完成的诊断"这一原则的真实案例。
+- `docs/INSTALL.md` 3.0 记录两条真机验证：0.5.2 安装包在隔离下跑通；`apparmor_restrict_unprivileged_userns=1`
+  时用 AppArmor profile 只放行 launcher 即可隔离（`available: true`、`stage: completed`）。
 ## 0.5.2
 
 - 发布包自带 `install.sh`：解包后 `sh install.sh` 即可链接 `sandbox` / `sandbox-launcher` /
@@ -67,6 +75,14 @@
 固定路径安装与普通用户运行、会话与批处理、workspace 配额与会话累计导出、控制通道 fd 化移交、
 报告 schema 2（`workspace` 字段）。更早的重构记录保留在仓库的 git 历史中。
 
+## 0.5.3
+
+- 安装器同时链接 `sbx`：Ubuntu 的 `policycoreutils-python-utils`（SELinux）也提供一个叫 `sandbox` 的命令，
+  同名会让人误装别的包；`sbx` 与 `sandbox` 是同一份二进制。
+- `docs/THREAT_MODEL.md` 新增 4.1：AppArmor 阻塞 → `doctor` 的 `remedy` → 只放行本 launcher 的 profile，
+  作为"只报 stage 是未完成的诊断"这一原则的真实案例。
+- `docs/INSTALL.md` 3.0 记录两条真机验证：0.5.2 安装包在隔离下跑通；`apparmor_restrict_unprivileged_userns=1`
+  时用 AppArmor profile 只放行 launcher 即可隔离（`available: true`、`stage: completed`）。
 ## 0.5.2
 
 - 发布包自带 `install.sh`：解包后 `sh install.sh` 即可链接 `sandbox` / `sandbox-launcher` /
