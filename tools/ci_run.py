@@ -46,8 +46,12 @@ def main(argv=None):
     if not target:
         print('--command is empty', file=sys.stderr)
         return 2
-    output = Path(args.output).resolve()
+    # systemd-run starts the command with the unit's working directory (the user's home), not
+    # the caller's, so relative paths are resolved against the workspace the caller meant.
+    base = Path(os.environ.get('GITHUB_WORKSPACE') or os.getcwd())
+    output = (base / args.output).resolve() if not Path(args.output).is_absolute() else Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    report_path = (Path(args.report) if Path(args.report).is_absolute() else base / args.report)
 
     config = {'schema_version': 1, 'argv': target, 'network': 'none'}
     # Ask the environment before preparing anything: an isolated run that cannot unshare fails
@@ -124,7 +128,7 @@ def main(argv=None):
     else:
         print('no report: ' + done.stderr.strip()[:400], file=sys.stderr)
         return 2
-    Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     export = ((report.get('workspace') or {}).get('export') or {})
     print('verdict=' + str(report.get('verdict')))
     print('summary=' + str(report.get('summary')))

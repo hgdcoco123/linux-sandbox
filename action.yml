@@ -139,9 +139,9 @@ runs:
         set -e
         cat sandbox-run.err >&2 || true
         if [ -s sandbox-run.err ]; then
-          # Surface the reason in the run summary too: a refusal that only exists in the log
-          # is invisible to whoever reads the check.
-          echo "::error title=sandbox::$(head -1 sandbox-run.err)"
+          # Surface the reason in the check itself; systemd-run's own "Running as unit" line is
+          # noise, so it is filtered out before picking the first useful line.
+          echo "::error title=sandbox::$(grep -v 'Running as unit' sandbox-run.err | head -1)"
         fi
         {
           echo '```'

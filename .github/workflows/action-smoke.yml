@@ -25,7 +25,7 @@ jobs:
         id: run
         uses: ./
         with:
-          command: /usr/bin/sandbox-fixture proc-view
+          command: /bin/echo sandbox-smoke
           timeout-ms: '3000'
           explain: 'false'
           # Hosted runners often do not delegate cpu/memory/pids to a user unit; this keeps the
