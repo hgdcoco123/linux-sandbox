@@ -54,6 +54,15 @@ CI 接线，不适合当安全边界。
 
 ## 已验证 / 未验证
 
+- **已验证（2026-11-07，真机）**：`tools/ci_run.py` 在 `systemd-run --user -p Delegate=yes` 里跑真实隔离
+  运行，输出 `verdict=ok`、`summary=success`、`exit_code=0`、`artifacts_ok=true`、
+  `manifest=artifact-manifest.json`；同一台机器上，缺委派或环境不允许 user namespace 时它会**拒绝**
+  并点名 stage（`isolation unavailable at stage make_mounts_private: Permission denied`）。
+  测试时临时放宽过 `kernel.apparmor_restrict_unprivileged_userns`（跑完恢复）——这是 Ubuntu 23.10+
+  的前置条件，不是 action 的开关。
+- **未验证**：在 GitHub 托管的 runner 上跑一遍（本机验证的是同一个机制，但没有走 GitHub 的
+  checkout/inputs 外壳）。
+
 - 已验证：`action.yml` 可解析；`tools/ci_run.py` 在没有委派 cgroup 时会**明确拒绝**并给出 stage；
   `--allow-process` 走诊断后端。
 - 未验证（本机环境限制）：isolated 路径端到端。这台虚拟机的 `kernel.apparmor_restrict_unprivileged_userns`

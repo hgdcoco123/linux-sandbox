@@ -89,6 +89,8 @@ runs:
           runtime="${INPUT_RUNTIME}"
         else
           runtime="${RUNNER_TEMP:-/tmp}/sandbox-runtime"
+          # make_runtime refuses an existing destination, and a retried job sees its own remains.
+          rm -rf "${runtime}"
           python3 tools/make_runtime.py --fixture build/sandbox-fixture --output "${runtime}"
         fi
         echo "path=${runtime}" >> "$GITHUB_OUTPUT"
