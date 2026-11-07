@@ -208,12 +208,15 @@ class Analyzer:
         # when the caller wants a proposal, the first turn is forced to produce a tool call.
         self.require_proposal = require_proposal
 
-    def judge(self, analysis, seen):
+    def judge(self, analysis, seen, started=None):
         """Ask the model whether each cited line, alone, supports its claim.
 
         Recorded only. A second opinion is not evidence, so it never changes the verdict or
         the citations; it exists so "the quote is real" and "the quote backs the claim" can
         be told apart in the metrics instead of being conflated.
+
+        Verdicts are per citation, not just totals: a number nobody can point at is not
+        auditable, and the whole reason to run this is to let a human spot-check it.
         """
         pairs = []
         for key in ('facts', 'hypotheses'):
@@ -223,14 +226,17 @@ class Analyzer:
                     lines = str(item.get('text') or '').splitlines() or ['']
                     line = ref.get('line', 1)
                     if type(line) is int and 1 <= line <= len(lines):
-                        pairs.append(dict(claim=str(claim.get('statement') or '')[:400],
-                                          line=lines[line - 1].strip()[:400]))
+                        pairs.append(dict(id=ref['id'], line=line,
+                                          claim=str(claim.get('statement') or '')[:400],
+                                          text=lines[line - 1].strip()[:400]))
         if not pairs:
             return {'checked': 0}
+        if started is not None and time.monotonic() - started >= self.deadline:
+            return {'checked': len(pairs), 'skipped': 'deadline'}
         prompt = ('For each numbered pair, decide whether the evidence line on its own supports '
                   'the claim. Reply with JSON only: {"verdicts": ["yes"|"no"|"unclear", ...]}, '
                   'exactly one entry per pair, in order.\n\n' +
-                  '\n'.join(str(index) + '. claim: ' + pair['claim'] + '\n   line: ' + pair['line']
+                  '\n'.join(str(index) + '. claim: ' + pair['claim'] + '\n   line: ' + pair['text']
                             for index, pair in enumerate(pairs, 1)))
         try:
             message = self.provider.complete(
@@ -240,22 +246,31 @@ class Analyzer:
             if (not isinstance(verdicts, list) or len(verdicts) != len(pairs)
                     or any(verdict not in ('yes', 'no', 'unclear') for verdict in verdicts)):
                 raise AnalysisError('self-check returned an invalid verdict list')
+            flagged = [dict(id=pair['id'], line=pair['line'], claim=pair['claim'][:120],
+                            verdict=verdict)
+                       for pair, verdict in zip(pairs, verdicts) if verdict != 'yes']
             return {'checked': len(pairs), 'supported': verdicts.count('yes'),
-                    'unsupported': verdicts.count('no'), 'unclear': verdicts.count('unclear')}
+                    'unsupported': verdicts.count('no'), 'unclear': verdicts.count('unclear'),
+                    'flagged': flagged[:5]}
         except (AnalysisError, TypeError, ValueError) as error:
             return {'checked': len(pairs), 'error': str(error)[:200]}
 
     def analyze(self, scope, run_id, question, session_id=None, refresh=False):
         if not isinstance(question, str) or not question.strip() or len(question) > 4000:
             raise AnalysisError('Question must contain 1..4000 characters')
+        if self.require_proposal and not self.templates:
+            # Forcing a named tool that is not in the tool list is a guaranteed 400 from the
+            # provider; say so here instead of looking like a model failure.
+            raise AnalysisError('require_proposal needs a template registry: without templates '
+                                'there is no propose_verification tool to call')
         bundle = self.store.bundle(scope, run_id)
         session_id = self.store.session(scope, session_id)
         history = self.store.history(scope, session_id)
         # A verification the operator already ran for an earlier proposal of this
         # conversation: it is a real run, so its report is citable evidence - but it is
-        # evidence about the proposal, not about the current run.
-        provenances = [turn.get('analysis_id') for turn in history if turn.get('analysis_id')]
-        receipts = self.store.verifications(scope, [p for p in provenances if p])
+        # evidence about the proposal, not about the current run. Looked up per session, not
+        # per recent turn: a check executed five turns ago is still part of this conversation.
+        receipts = self.store.verifications_by_session(scope, session_id)
         verification_items = []
         for receipt in receipts:
             try:
@@ -268,6 +283,9 @@ class Analyzer:
                       self.semantic, getattr(self.provider, 'embedding_identity', ''),
                       self.store.corpus_version(scope),
                       [r['run_id'] for r in receipts],
+                      # These two change what the answer contains: a cached answer from a run
+                      # without --self-check must never satisfy a run that asked for it.
+                      self.self_check, self.require_proposal,
                       self.templates.catalog() if self.templates else [], self.max_calls, self.max_tools])
         if not refresh:
             cached = self.store.cached(scope, key)
@@ -429,7 +447,7 @@ class Analyzer:
         # The self-check is another model call: run it before the accounting, or its tokens
         # and seconds are silently missing from the report.
         if self.self_check:
-            support = self.judge(result['analysis'] or {}, seen)
+            support = self.judge(result['analysis'] or {}, seen, started)
         result['usage'] = list(self.provider.usage[usage_start:])
         result['elapsed_seconds'] = round(time.monotonic()-started, 3)
         # The five capabilities each leave a number here, so a reviewer can measure them

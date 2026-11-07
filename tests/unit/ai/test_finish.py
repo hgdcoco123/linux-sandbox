@@ -230,7 +230,10 @@ class SelfCheck(unittest.TestCase):
         model = self.provider(['no'])
         analyzer = Analyzer(store=None, provider=model, self_check=True)
         result = analyzer.judge(self.analysis(), seen)
-        self.assertEqual(result, {'checked': 1, 'supported': 0, 'unsupported': 1, 'unclear': 0})
+        self.assertEqual(result['checked'], 1)
+        self.assertEqual(result['supported'], 0)
+        self.assertEqual(result['unsupported'], 1)
+        self.assertEqual(result['flagged'][0]['id'], 'ev-1')
         model_bad = self.provider(['maybe'])
         bad = Analyzer(store=None, provider=model_bad, self_check=True).judge(self.analysis(), seen)
         self.assertIn('error', bad)
@@ -336,6 +339,98 @@ class Accounting(unittest.TestCase):
                 self.assertEqual(len(result['usage']), 2)
                 self.assertEqual(result['metrics']['self_check']['supported'], 1)
                 self.assertEqual(result['metrics']['self_check']['judge'], 'model')
+            finally:
+                store.close()
+
+
+class CacheDiscipline(unittest.TestCase):
+    def provider(self):
+        class Provider:
+            identity = 'cache-discipline'
+            def __init__(self):
+                self.usage = []
+                self.calls = 0
+            def complete(self, messages, tools, force_tool=False, force_tool_name=None):
+                self.calls += 1
+                self.usage.append({'total_tokens': 5})
+                if 'judge' in (messages[0].get('content') or ''):
+                    return dict(role='assistant', content=json.dumps({'verdicts': ['yes']}))
+                item = json.loads(messages[1]['content'])['evidence'][0]
+                return dict(role='assistant', content=json.dumps(dict(
+                    summary='s', facts=[dict(statement='the target exited 7',
+                                             citations=[line_reference(item)])],
+                    hypotheses=[], missing_info=[], next_steps=[])))
+        return Provider()
+
+    def run_once(self, store, provider, bundle, **flags):
+        return Analyzer(store, provider, **flags).analyze('p', bundle.run_id, 'why?')
+
+    def test_asking_for_the_self_check_is_not_answered_from_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root/'run'
+            run.mkdir()
+            (run/'result.json').write_text(json.dumps(dict(run_id='run-a', summary='nonzero_exit', errors=[])))
+            (run/'stdout.bin').write_bytes(b'')
+            (run/'stderr.bin').write_bytes(b'exit code 7\n')
+            from sandbox_ai.evidence import collect
+            store = Store(root/'s.db')
+            try:
+                bundle = collect('p', run)
+                store.put_bundle(bundle)
+                provider = self.provider()
+                first = self.run_once(store, provider, bundle)
+                self.assertNotIn('self_check', first['metrics'])
+                calls_before = provider.calls
+                second = self.run_once(store, provider, bundle, self_check=True)
+                self.assertGreater(provider.calls, calls_before,
+                                   'the self-check request was answered from cache')
+                self.assertIn('self_check', second['metrics'])
+                self.assertFalse(second['metrics']['cache_hit'])
+                self.assertEqual(second['metrics']['usage_records'], 2)
+            finally:
+                store.close()
+
+
+class ProposalGuard(unittest.TestCase):
+    def test_requiring_a_proposal_without_templates_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root/'run'
+            run.mkdir()
+            (run/'result.json').write_text(json.dumps(dict(run_id='run-a', summary='nonzero_exit', errors=[])))
+            (run/'stdout.bin').write_bytes(b'')
+            (run/'stderr.bin').write_bytes(b'')
+            from sandbox_ai.evidence import collect
+            store = Store(root/'s.db')
+            try:
+                bundle = collect('p', run)
+                store.put_bundle(bundle)
+                engine = Analyzer(store, object(), require_proposal=True)
+                with self.assertRaisesRegex(AnalysisError, 'needs a template registry'):
+                    engine.analyze('p', bundle.run_id, 'why?')
+            finally:
+                store.close()
+
+
+class ReceiptWindow(unittest.TestCase):
+    def test_the_window_is_the_whole_session(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp)/'s.db')
+            try:
+                session = store.session('p', None)
+                for index in range(4):
+                    store.remember('p', session, 'q' + str(index),
+                                   dict(analysis_id='a' + str(index), run_id='run-' + str(index),
+                                        status='completed', analysis=dict(summary='s')))
+                store.save_verification('p', dict(
+                    scope='p', analysis_id='a0', proposal_id='prop', run_id='run-verify',
+                    status='executed_not_automatically_confirmed', template_digest='d',
+                    execution=dict(summary='ok')))
+                recent = store.verifications('p', ['a1', 'a2', 'a3'])
+                whole = store.verifications_by_session('p', session)
+                self.assertEqual(recent, [], 'the receipt is older than the three-turn window')
+                self.assertEqual([item['run_id'] for item in whole], ['run-verify'])
             finally:
                 store.close()
 

@@ -305,6 +305,31 @@ class Store:
                             (scope, receipt['analysis_id'], receipt['proposal_id'],
                              receipt['run_id'], canonical(receipt)))
 
+    def verifications_by_session(self, scope, session_id, limit=4):
+        """Every verification this conversation ran, however many turns ago.
+
+        `verifications()` is keyed by the last three turns' analyses, so a receipt older than
+        that window silently stops feeding the loop: the model just stops seeing that a check
+        was executed. This walks the whole session instead.
+        """
+        rows = self.db.execute('SELECT body FROM turns WHERE session=? AND scope=?',
+                               (session_id, scope)).fetchall()
+        ids = []
+        for row in rows:
+            try:
+                analysis_id = json.loads(row[0]).get('analysis_id')
+            except ValueError:
+                continue
+            if analysis_id:
+                ids.append(analysis_id)
+        if not ids:
+            return []
+        marks = ','.join('?' * len(ids))
+        rows = self.db.execute(
+            'SELECT body FROM verifications WHERE scope=? AND analysis_id IN (' + marks + ') '
+            'ORDER BY rowid DESC LIMIT ?', [scope] + ids + [limit]).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def verifications(self, scope, analysis_ids, limit=4):
         if not analysis_ids:
             return []
