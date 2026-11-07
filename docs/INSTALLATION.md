@@ -1,4 +1,5 @@
 # 固定路径安装与普通用户运行
+> **当前安装说明在 [INSTALL.md](INSTALL.md)**（prefix 安装 + 三种启动模式 + doctor 判读）；本文是 0.4/0.5 时期的固定路径安装记录，保留作历史。契约与版本见 [CONTRACT.md](CONTRACT.md)。
 
 > 0.5 新增 `sandbox-run --batch --config FILE`，不变更应用专属 AppArmor 策略；完整验收新增批次和输出线程，见 VALIDATION.md。
 

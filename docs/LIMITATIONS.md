@@ -1,4 +1,5 @@
 # 当前边界
+> **安全边界按 [THREAT_MODEL.md](THREAT_MODEL.md) 为准**（防什么、不防什么、每条声明对应的测试、已知薄弱点）；本文是 0.3–0.6 时期的功能边界记录。
 
 > **验证状态（0.6）**：Ubuntu 24.04 上 `ctest` 33/33，`tools/isolated-accept.sh` 必检行全齐、
 > 服务 `code=exited/status=0`（详见 [ACCEPTANCE](ACCEPTANCE.md) 顶部）。下面"0.5 / 0.4 / 0.3
