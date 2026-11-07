@@ -131,10 +131,10 @@ runs:
           --sandbox "${GITHUB_ACTION_PATH}/build/sandbox" \
           --command "${INPUT_COMMAND}" \
           --runtime "${RUNTIME_PATH}" \
-          --output "${INPUT_OUTPUT}" \
+          --output "${GITHUB_WORKSPACE}/${INPUT_OUTPUT}" \
           --timeout-ms "${INPUT_TIMEOUT}" \
           --memory "${INPUT_MEMORY}" \
-          --report sandbox-report.json ${extra} > sandbox-run.txt 2> sandbox-run.err
+          --report "${GITHUB_WORKSPACE}/sandbox-report.json" ${extra} > sandbox-run.txt 2> sandbox-run.err
         status=$?
         set -e
         cat sandbox-run.err >&2 || true
