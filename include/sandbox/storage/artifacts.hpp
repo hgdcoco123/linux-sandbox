@@ -59,6 +59,10 @@ void create_transfer_layout(const fs::path &run_directory);
 // the single-run export and the session handover.
 PublishResult publish_tree_over(const fs::path &incoming, const fs::path &published,
                                 const WorkspacePolicy &);
+// A manifest of what was delivered: path, type, size and sha256 per entry, so a consumer
+// can prove the tree it received is the tree the sandbox published. Bounded by an entry
+// count and a hashing budget; `truncated` says when the list or the digests stopped short.
+Json manifest_of(const fs::path &root, std::size_t max_entries, std::uint64_t max_hash_bytes);
 Json export_workspace(int transfer, const std::string &tag, const WorkspacePolicy &,
                       const std::function<bool()> &interrupted = {});
 Json import_workspace(int transfer, const std::string &name, const WorkspacePolicy &,

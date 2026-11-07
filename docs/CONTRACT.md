@@ -15,7 +15,7 @@
 |---|---|---|
 | **稳定** | `run_id`、`summary`、`verdict`、`exit_code`、`signal`、`isolated`、`errors[]`、`exec_observed`、`exec_error` | 上层可以用它们做判定。`verdict=harness_error` 时 `exit_code` 可能是 `null`，这不是缺陷而是事实 |
 | **稳定** | `cleanup{cgroup_removed,descendants_empty,launcher_reaped,errors[]}` | 清理是否完成 |
-| **稳定** | `workspace{export{attempted,ok,durable,error,bytes,entries}, mode, limits}` | **`export.ok=false` 时不得视为成功** |
+| **稳定** | `workspace{export{attempted,ok,durable,error,bytes,entries,manifest,manifest_entries,manifest_truncated,manifest_error}, mode, limits}` | **`export.ok=false` 时不得视为成功**；`manifest` 指向运行目录下的 `artifact-manifest.json`（`path/type/size/sha256`，受 2048 条与 16 MiB 哈希预算限制，`manifest_truncated` 说明是否截断） |
 | **稳定** | `stop_reason`、`stdout/stderr{saved_bytes,discarded_bytes,eof,flushed,write_error}` | 输出是否被截断/丢弃 |
 | **实验** | `metrics.*`（`cpu.stat`、`memory.*`、`pids.*`、`sampling.history`） | 字段会随内核版本变化；不要据此做硬判定 |
 | **诊断** | `internal.log` 的文本格式、`security{policy,version}` | 供人读；解析请以 report 字段为准 |

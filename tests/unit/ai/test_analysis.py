@@ -129,6 +129,89 @@ class EvidenceTests(Fixture):
         self.assertNotIn('secret-value', canonical(bundle.json()))
 
 
+class RetrievalCostTests(Fixture):
+    def reference(self, store, query, limit=8):
+        """The pre-optimisation scoring, kept here as the definition of correct."""
+        import math
+        from collections import Counter
+        from sandbox_ai.store import tokens
+        items = store.corpus('project-a')
+        terms = set(tokens(query))
+        counts = [Counter(tokens(e.text)) for e in items]
+        frequencies = {term: sum(term in c for c in counts) for term in terms}
+        average = sum(sum(c.values()) for c in counts) / len(counts) or 1
+        scored = []
+        for index, count in enumerate(counts):
+            score = 0.0
+            for term in terms:
+                tf = count[term]
+                if tf:
+                    df = frequencies[term]
+                    idf = math.log(1 + (len(items)-df+0.5)/(df+0.5))
+                    score += idf * tf * 2.2 / (tf+1.2*(0.25+0.75*sum(count.values())/average))
+            if score:
+                scored.append((index, score))
+        scored.sort(key=lambda x: (-x[1], items[x[0]].id))
+        return [items[i].id for i, _ in scored[:limit]]
+
+    def test_ranking_is_unchanged_by_the_cache(self):
+        for index, text in enumerate(['alpha beta gamma error opening file',
+                                      'beta gamma delta timed out',
+                                      'gamma omega failure in the loader',
+                                      'unrelated words about alpha']):
+            (self.run/('extra-%d.txt' % index)).write_bytes(text.encode())
+        bundle = collect('project-a', self.run)
+        self.store.put_bundle(bundle)
+        for query in ('error opening file', 'timeout beta', 'gamma'):
+            self.assertEqual(
+                [hit['evidence']['id'] for hit in self.store.search('project-a', query)],
+                self.reference(self.store, query), query)
+
+    def test_statistics_are_reused_until_the_corpus_changes(self):
+        first = self.store.lexical('project-a')
+        self.assertIs(self.store.lexical('project-a'), first)
+        (self.run/'more.txt').write_bytes(b'one more line of evidence\n')
+        self.store.put_bundle(collect('project-a', self.run), force=True)
+        self.assertIsNot(self.store.lexical('project-a'), first)
+
+
+class VectorLayoutTests(unittest.TestCase):
+    def test_blob_and_json_layouts_decode_alike(self):
+        from sandbox_ai.store import decode_vector, encode_vector
+        values = [0.5, -0.25, 1.0, 0.0]
+        blob = decode_vector(encode_vector(values))
+        legacy = decode_vector(json.dumps(values))
+        for a, b in zip(blob, legacy):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_indexed_vectors_are_stored_as_blobs(self):
+        import tempfile
+        from sandbox_ai.store import normalize
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root/'run'
+            run.mkdir()
+            (run/'result.json').write_text(json.dumps(dict(run_id='run-a', summary='nonzero_exit', errors=[])))
+            (run/'stdout.bin').write_bytes(b'')
+            (run/'stderr.bin').write_bytes(b'boom\n')
+            store = Store(root/'s.db')
+            try:
+                bundle = collect('p', run)
+                store.put_bundle(bundle)
+                class Provider:
+                    embedding_identity = 'p:4'
+                    def embed(self, text):
+                        return [1.0, 0.0, 0.0, 0.0]
+                self.assertEqual(store.embed('p', Provider()), len(bundle.evidence))
+                kinds = {type(value) for (value,) in
+                         store.db.execute('SELECT vector FROM vectors')}
+                self.assertEqual(kinds, {bytes}, 'vectors should be stored as float32 blobs')
+                hits = store.search('p', 'boom', limit=4, provider=Provider())
+                self.assertTrue(hits)
+            finally:
+                store.close()
+
+
 class NamedDocumentTests(Fixture):
     def test_a_file_the_question_names_is_included_before_ranking(self):
         # A 20-byte spec is the requirement; BM25 will not surface it (its words are not in

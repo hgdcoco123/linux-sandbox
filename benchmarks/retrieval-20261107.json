@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "what": "sandbox_ai retrieval cost, before and after caching token statistics and storing vectors as float32 blobs",
+  "host": "Windows 11, Python 3.12, SQLite 3.45 (synthetic corpus, no network)",
+  "method": "Store.search() on a generated corpus; timings are one warm-up-free call after import. Same corpus and same queries for both revisions.",
+  "lexical": {
+    "corpus_chunks": 2000,
+    "query": "why did opening file 1733 fail",
+    "before_ms": 55.4,
+    "after_first_ms": 56.1,
+    "after_cached_ms": 2.9,
+    "after_repeat_ms": 0.0,
+    "note": "first call pays for building counts/lengths/postings; every later query on an unchanged corpus is a postings lookup"
+  },
+  "semantic": {
+    "corpus_chunks": 1000,
+    "dimensions": 1024,
+    "query": "why did file 733 fail",
+    "before_ms": 340.7,
+    "after_first_ms": 77.0,
+    "after_cached_ms": 56.5,
+    "storage_before_mib": 20.0,
+    "storage_after_mib": 4.9,
+    "note": "before: JSON text parsed per query; after: float32 blobs decoded once per corpus generation. The remaining cost is the pure-Python dot product (no numpy dependency)."
+  },
+  "tests": "the pre-optimisation scoring is kept as a reference implementation in tests/unit/ai/test_analysis.py (RetrievalCostTests) and the ranking must match exactly"
+}

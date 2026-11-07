@@ -168,6 +168,39 @@ void test_callback_cannot_poison_the_copy() {
     ::close(dest);
 }
 
+void test_manifest_describes_what_was_delivered() {
+    Scratch scratch;
+    const auto tree = scratch.root / "manifest-src";
+    fs::create_directories(tree);
+    write_file(tree / "answer.txt", "42\n");
+    auto manifest = manifest_of(tree, 64, 1u << 20);
+    check(manifest["entries"].size() == 1, "the manifest lists the delivered file");
+    const auto &entry = manifest["entries"][0];
+    check(entry["path"] == "answer.txt", "the manifest path is relative to the tree");
+    check(entry["type"] == "file", "the manifest records the entry type");
+    check(entry["size"] == 3, "the manifest records the size");
+    check(entry["sha256"].get<std::string>().size() == 64, "the manifest records a digest");
+    check(manifest["truncated"] == false, "a small tree is not truncated");
+
+    // The same bytes must hash the same way on a second walk.
+    auto again = manifest_of(tree, 64, 1u << 20);
+    check(again["entries"][0]["sha256"] == entry["sha256"], "the digest is stable");
+}
+
+void test_manifest_bounds_itself() {
+    Scratch scratch;
+    const auto tree = scratch.root / "manifest-bounds";
+    fs::create_directories(tree);
+    write_file(tree / "a.txt", "a\n");
+    write_file(tree / "b.txt", "b\n");
+    auto capped = manifest_of(tree, 1, 1u << 20);
+    check(capped["entries"].size() == 1, "the entry budget is enforced");
+    check(capped["truncated"] == true, "a capped manifest says it is truncated");
+    auto unhashed = manifest_of(tree, 64, 0);
+    check(unhashed["entries"][0]["sha256"] == "", "no hashing budget means no digest");
+    check(unhashed["truncated"] == true, "an unhashed entry marks the manifest truncated");
+}
+
 void test_interrupt_leaves_nothing_published() {
     Scratch scratch;
     WorkspacePolicy policy;
@@ -398,6 +431,8 @@ int main() {
         test_refuses_a_symlink();
         test_refuses_a_hardlink();
         test_callback_cannot_poison_the_copy();
+        test_manifest_describes_what_was_delivered();
+        test_manifest_bounds_itself();
         test_interrupt_leaves_nothing_published();
         test_budget_applies();
         test_publish_over_swaps_and_reclaims();

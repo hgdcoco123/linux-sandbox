@@ -325,6 +325,100 @@ void create_transfer_layout(const fs::path &run_directory) {
     create_directories_or_remove({run_directory / "transfer", run_directory / "transfer" / "in"});
 }
 
+Json manifest_of(const fs::path &root, std::size_t max_entries, std::uint64_t max_hash_bytes) {
+    Json entries = Json::array();
+    bool truncated = false;
+    std::uint64_t hashed = 0;
+    auto input = open_path(root, O_RDONLY | O_DIRECTORY);
+    std::function<void(int, const std::string &)> descend = [&](int dir,
+                                                                const std::string &prefix) {
+        DIR *raw = ::fdopendir(checked(::fcntl(dir, F_DUPFD_CLOEXEC, 3), "duplicate manifest dir"));
+        if (!raw)
+            system_error("fdopendir");
+        struct Closer {
+            void operator()(DIR *handle) const noexcept {
+                ::closedir(handle);
+            }
+        };
+        std::unique_ptr<DIR, Closer> listing(raw);
+        errno = 0;
+        while (auto *entry = ::readdir(raw)) {
+            std::string name = entry->d_name;
+            if (name == "." || name == "..")
+                continue;
+            std::string path = prefix + name;
+            if (entries.size() >= max_entries || path.size() > 4096) {
+                truncated = true;
+                break;
+            }
+            struct stat before{};
+            checked(::fstatat(dir, name.c_str(), &before, AT_SYMLINK_NOFOLLOW),
+                    "stat published entry");
+            if (S_ISDIR(before.st_mode)) {
+                entries.push_back({{"path", path}, {"type", "directory"}});
+                auto child = UniqueFd(checked(::openat(dir, name.c_str(),
+                                                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
+                                                           O_CLOEXEC),
+                                              "open published directory"));
+                descend(child.get(), path + "/");
+                continue;
+            }
+            if (!S_ISREG(before.st_mode)) {
+                entries.push_back({{"path", path}, {"type", "other"}});
+                continue;
+            }
+            Json item = {{"path", path},
+                         {"type", "file"},
+                         {"size", static_cast<std::uint64_t>(before.st_size)},
+                         {"sha256", ""}};
+            if (hashed < max_hash_bytes) {
+                auto file = UniqueFd(checked(::openat(dir, name.c_str(),
+                                                      O_RDONLY | O_NONBLOCK | O_NOFOLLOW |
+                                                          O_CLOEXEC),
+                                             "open published file"));
+                std::array<char, 65536> buf{};
+                Sha256 digest;
+                std::uint64_t size = 0;
+                bool complete = true;
+                for (;;) {
+                    auto n = ::read(file.get(), buf.data(), buf.size());
+                    if (n < 0 && errno == EINTR)
+                        continue;
+                    checked(static_cast<int>(n), "read published file");
+                    if (!n)
+                        break;
+                    size += static_cast<std::uint64_t>(n);
+                    digest.update(std::string_view(buf.data(), static_cast<std::size_t>(n)));
+                    // The hash budget is a cost bound, not a correctness knob: a file that
+                    // would cross it is listed with its size and no digest.
+                    if (hashed + size > max_hash_bytes) {
+                        complete = false;
+                        break;
+                    }
+                }
+                if (complete) {
+                    hashed += size;
+                    item["sha256"] = digest.hex();
+                } else {
+                    truncated = true;
+                }
+            } else {
+                // No budget left for digests: the entry is still listed, and the flag says
+                // that the digests stopped short instead of pretending an empty hash is one.
+                truncated = true;
+            }
+            entries.push_back(item);
+        }
+        if (errno)
+            system_error("read published directory");
+    };
+    descend(input.get(), "");
+    return Json{{"schema_version", 1},
+                {"entries", entries},
+                {"truncated", truncated},
+                {"hashed_bytes", hashed}};
+}
+
 Json export_workspace(int transfer, const std::string &tag, const WorkspacePolicy &policy,
                       const std::function<bool()> &interrupted) {
     auto workspace = directory("/output");

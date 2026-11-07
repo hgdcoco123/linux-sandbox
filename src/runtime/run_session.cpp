@@ -694,6 +694,32 @@ void RunSession::publish_workspace(std::uint32_t entries, std::uint64_t bytes) {
         outcome.retained_previous_path.empty() ? "" : outcome.retained_previous_path.string();
     if (!outcome.cleanup_error.empty())
         report_.cleanup_errors.push_back(outcome.cleanup_error);
+    if (outcome.published) {
+        // The delivered tree gets a manifest so a consumer can prove the bytes it received
+        // are the bytes this run published. The session path already carries sha256 through
+        // its files API; a one-shot run used to lose it and keep only a count.
+        try {
+            const Json manifest = manifest_of(output_destination_, 2048, std::uint64_t{16} << 20);
+            const auto path = store_->directory() / "artifact-manifest.json";
+            auto file = UniqueFd(checked(::open((path.string() + ".tmp").c_str(),
+                                                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
+                                                    O_CLOEXEC,
+                                                0600),
+                                         "create artifact manifest"));
+            write_all(file.get(), manifest.dump());
+            checked(::fsync(file.get()), "fsync artifact manifest");
+            file.reset();
+            checked(::rename((path.string() + ".tmp").c_str(), path.c_str()),
+                    "publish artifact manifest");
+            report_.workspace["export"]["manifest"] = "artifact-manifest.json";
+            report_.workspace["export"]["manifest_entries"] = manifest["entries"].size();
+            report_.workspace["export"]["manifest_truncated"] = manifest["truncated"];
+        } catch (const std::exception &failure) {
+            // A missing manifest does not change what was delivered; say so rather than
+            // failing a run whose artifacts are already in place.
+            report_.workspace["export"]["manifest_error"] = failure.what();
+        }
+    }
     if (logger_) {
         if (!outcome.durability_confirmed)
             logger_->warn("workspace published but not durable: {}", outcome.durability_error);

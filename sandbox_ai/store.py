@@ -2,12 +2,17 @@
 from collections import Counter
 import json
 import math
+from operator import mul
 from pathlib import Path
 import re
 import sqlite3
 import uuid
 
 from .models import AnalysisError, Bundle, Evidence, canonical
+try:
+    from array import array
+except ImportError:  # pragma: no cover
+    array = None
 
 try:
     import fcntl
@@ -26,6 +31,24 @@ def _lock(path):
         handle.close()
         raise AnalysisError('This database is already open in another process; one writer is allowed')
     return handle
+
+
+def encode_vector(vector):
+    """float32 blob: ~4x smaller than a JSON array and parsed without a JSON pass."""
+    if array is None:                     # pragma: no cover - array ships with CPython
+        return canonical([float(v) for v in vector])
+    return array('f', [float(v) for v in vector]).tobytes()
+
+
+def decode_vector(value):
+    """Accept both layouts: blobs written now, JSON text from older databases."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        if array is None:                 # pragma: no cover
+            raise AnalysisError('Vector binary format needs the array module')
+        decoded = array('f')
+        decoded.frombytes(bytes(value))
+        return decoded
+    return array('f', json.loads(value)) if array is not None else json.loads(value)
 
 
 def tokens(text):
@@ -59,6 +82,8 @@ class Store:
         # counter whenever the corpus changes, so it cannot serve a stale answer.
         self._generation = 0
         self._corpus = {}
+        self._lexical = {}
+        self._vectors = {}
         self.db.execute('PRAGMA journal_mode=WAL')
         # A database written by a newer version of this code is refused rather than migrated
         # by guesswork: silently writing into a schema we do not understand is how data is lost.
@@ -161,6 +186,42 @@ class Store:
         self._corpus[scope] = (self._generation, items)
         return list(items)
 
+    def lexical(self, scope, exclude_run=None):
+        """Token counts, lengths and postings for a generation.
+
+        Every query used to re-tokenize the whole corpus and recompute document
+        frequencies; at a few thousand chunks that cost tens of milliseconds per query,
+        and an analysis can issue several. The statistics only change when the corpus
+        does, so they are cached against the same generation counter as the corpus.
+        """
+        key = (scope, exclude_run)
+        cached = self._lexical.get(key)
+        if cached is not None and cached[0] == self._generation:
+            return cached[1]
+        items = [e for e in self.corpus(scope)
+                 if exclude_run is None or e.run_id != exclude_run]
+        counts, lengths, postings = [], [], {}
+        for index, item in enumerate(items):
+            count = Counter(tokens(item.text))
+            counts.append(count)
+            lengths.append(sum(count.values()))
+            for term in count:
+                postings.setdefault(term, []).append(index)
+        stats = dict(items=items, counts=counts, lengths=lengths, postings=postings,
+                     average=(sum(lengths) / len(lengths)) if lengths else 1)
+        self._lexical[key] = (self._generation, stats)
+        return stats
+
+    def matrix(self, model):
+        """Vectors for one model, decoded once per generation instead of once per query."""
+        cached = self._vectors.get(model)
+        if cached is not None and cached[0] == self._generation:
+            return cached[1]
+        rows = self.db.execute('SELECT id,vector FROM vectors WHERE model=?', (model,)).fetchall()
+        vectors = {row[0]: decode_vector(row[1]) for row in rows}
+        self._vectors[model] = (self._generation, vectors)
+        return vectors
+
     def get(self, scope, evidence_id):
         row = self.db.execute('SELECT body FROM evidence WHERE scope=? AND id=?', (scope, evidence_id)).fetchone()
         if not row:
@@ -176,43 +237,48 @@ class Store:
             raise AnalysisError('Embedding dimensions changed during indexing')
         with self.db:
             for item, vector in zip(items, vectors):
-                self.db.execute('INSERT OR REPLACE INTO vectors VALUES(?,?,?)', (item.id, model, canonical(vector)))
+                self.db.execute('INSERT OR REPLACE INTO vectors VALUES(?,?,?)',
+                                (item.id, model, encode_vector(vector)))
         return len(items)
 
     def search(self, scope, query, limit=6, provider=None, exclude_run=None):
         if not 1 <= limit <= 12 or not isinstance(query, str) or len(query) > 4000:
             raise AnalysisError('Invalid search budget')
-        items = [e for e in self.corpus(scope) if e.run_id != exclude_run]
+        stats = self.lexical(scope, exclude_run)
+        items = stats['items']
         if not items:
             return []
         terms = set(tokens(query))
-        counts = [Counter(tokens(e.text)) for e in items]
-        frequencies = {term: sum(term in c for c in counts) for term in terms}
-        average = sum(sum(c.values()) for c in counts) / len(counts) or 1
+        counts, lengths, postings = stats['counts'], stats['lengths'], stats['postings']
+        average = stats['average'] or 1
+        candidates = set()
+        for term in terms:
+            candidates.update(postings.get(term, ()))
+        total = len(items)
         lexical = []
-        for i, count in enumerate(counts):
+        for i in candidates:
+            count = counts[i]
             score = 0.0
             for term in terms:
-                tf = count[term]
+                tf = count.get(term)
                 if tf:
-                    df = frequencies[term]
-                    idf = math.log(1 + (len(items)-df+0.5)/(df+0.5))
-                    score += idf * tf * 2.2 / (tf+1.2*(0.25+0.75*sum(count.values())/average))
+                    df = len(postings[term])
+                    idf = math.log(1 + (total-df+0.5)/(df+0.5))
+                    score += idf * tf * 2.2 / (tf+1.2*(0.25+0.75*lengths[i]/average))
             if score:
                 lexical.append((i, score))
         lexical.sort(key=lambda x: (-x[1], items[x[0]].id))
         semantic = []
         if provider:
             query_vec = normalize(provider.embed(query))
-            vectors = dict(self.db.execute('SELECT id,vector FROM vectors WHERE model=?',
-                                          (provider.embedding_identity,)).fetchall())
+            vectors = self.matrix(provider.embedding_identity)
             for i, item in enumerate(items):
-                if item.id not in vectors:
+                vector = vectors.get(item.id)
+                if vector is None:
                     raise AnalysisError('Embedding index incomplete for this model; run --semantic index')
-                vector = json.loads(vectors[item.id])
                 if len(vector) != len(query_vec):
                     raise AnalysisError('Embedding dimension mismatch; rebuild index')
-                score = sum(a*b for a, b in zip(query_vec, vector))
+                score = sum(map(mul, query_vec, vector))
                 if score > 0:
                     semantic.append((i, score))
             semantic.sort(key=lambda x: (-x[1], items[x[0]].id))
