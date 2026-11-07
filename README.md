@@ -50,16 +50,23 @@ exit:       0 (0 means success)
 ### 预编译包
 
 ```bash
+# 一条命令：下载 → 校验 sha256 → 装到 ~/.local → 冒烟测试 → 报告隔离是否可用
+git clone --depth 1 https://github.com/hgdcoco123/linux-sandbox.git
+sh linux-sandbox/tools/quick-install.sh
+```
+
+不想跑脚本就手动来（等价命令，需要自己 `sudo mkdir`）：
+
+```bash
 ver=0.5.1
 file="linux-sandbox-${ver}-linux-x86_64.tar.gz"
 curl -fL --retry 3 --retry-delay 2 -o "$file" \
   "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}"
 test -s "$file" || { echo "download failed; see Troubleshooting below"; exit 1; }
-
+sha256sum -c <(curl -fsSL "https://github.com/hgdcoco123/linux-sandbox/releases/download/v${ver}/${file}.sha256")
 sudo mkdir -p /opt && sudo tar -xzf "$file" -C /opt
 export PATH="/opt/linux-sandbox-${ver}-linux-x86_64/bin:$PATH"
-
-sandbox doctor              # 报告这台机器支持哪种启动模式
+sandbox doctor
 ```
 
 ### 从源码

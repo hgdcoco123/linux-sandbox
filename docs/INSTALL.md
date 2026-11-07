@@ -30,6 +30,22 @@ $prefix/share/linux-sandbox/tools/*.py # 委派/运行时辅助脚本
 
 ## 2.1 或者用预编译包（不用装编译工具链）
 
+**推荐：一条命令装好并自检**（不需要 sudo，装在 `~/.local`）：
+
+```bash
+git clone --depth 1 https://github.com/hgdcoco123/linux-sandbox.git
+sh linux-sandbox/tools/quick-install.sh
+```
+
+它会：检查 Linux / x86_64 / glibc → 下载并**校验 sha256**（校验不了就拒绝安装）→ 解包到
+`~/.local` → 链接 `sandbox`/`sandbox-launcher`/`sandbox-ai` → 跑一次冒烟测试（必须返回 10）→
+报告隔离是否可用，不可用时打印 `doctor` 给出的处理建议。
+
+常用参数：`--prefix /opt`（换安装位置）、`--from ./pkg.tar.gz`（离线安装）、`--apparmor`
+（顺带用 AppArmor 只给这个 launcher 放行 `userns,`，需要 root，非免密 sudo 会直接报错而不是等待）。
+
+**手动装**（不走脚本时）：
+
 ```bash
 # 下载（-o 明确文件名；-O 是大写字母 O，写成 -0 会让 curl 输出到终端导致"文件不存在"）
 ver=0.5.1; file="linux-sandbox-${ver}-linux-x86_64.tar.gz"
