@@ -1,0 +1,4 @@
+[console_scripts]
+sandbox = sandbox_ai.bin_entry:sandbox
+sandbox-ai = sandbox_ai.cli:main
+sbx = sandbox_ai.bin_entry:sbx

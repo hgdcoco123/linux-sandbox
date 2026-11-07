@@ -27,7 +27,14 @@ sdk = ["protobuf>=3.20"]
 Documentation = "https://github.com/OWNER/linux-sandbox/blob/master/docs/QUICKSTART.md"
 
 [project.scripts]
+sandbox = "sandbox_ai.bin_entry:sandbox"
+sbx = "sandbox_ai.bin_entry:sbx"
 sandbox-ai = "sandbox_ai.cli:main"
 
 [tool.setuptools]
-packages = ["sandbox_ai", "sdk"]
+# linux_sandbox_bin holds the static binaries; tools/build_wheel.sh stages them before building
+# and removes them afterwards, so the source tree never carries build output.
+packages = ["sandbox_ai", "sdk", "linux_sandbox_bin"]
+
+[tool.setuptools.package-data]
+linux_sandbox_bin = ["sandbox", "sandbox-launcher"]

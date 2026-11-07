@@ -98,6 +98,38 @@ tar -xzf dist/linux-sandbox-0.5.0-linux-x86_64.tar.gz -C /tmp
 | 安全边界（防什么、不防什么） | [THREAT_MODEL.md](THREAT_MODEL.md) |
 | 已知未验证项 | [VERIFY_ELSEWHERE.md](VERIFY_ELSEWHERE.md)、`AI_VALIDATION.md` |
 
+## 6.5 发到 PyPI（让陌生用户能 `pip install`）
+
+GitHub Releases 在国内经常连不上；PyPI 有大量镜像（清华、阿里…），是"陌生用户真的能拿到"的通道。
+从 0.5.3 起仓库支持把它打成**平台 wheel**，里面带静态二进制：
+
+```bash
+bash tools/build_wheel.sh                 # 需要先有静态构建：-DSANDBOX_STATIC_DEPS=ON
+# -> dist/linux_sandbox-<ver>-py3-none-linux_x86_64.whl
+```
+
+脚本会检查：二进制与 `pyproject.toml` 版本一致、二进制确实静态链接、wheel 里有 `sandbox` 与
+`sandbox-launcher` 且可执行、wheel 不是 `py3-none-any`（防止被装到 macOS 上）。
+
+上传（需要 pypi.org 账号与 token）：
+
+```bash
+python3 -m pip install --user twine
+python3 -m twine upload dist/linux_sandbox-<ver>-py3-none-linux_x86_64.whl
+```
+
+发布后用户侧：
+
+```bash
+pip install linux-sandbox        # 得到 sandbox / sbx / sandbox-ai 三个命令
+sandbox --version
+```
+
+注意两点：
+
+- wheel 的 tag 是 `linux_x86_64`，pip 只在 Linux x86_64 上装；其他架构会被正确地拒绝而不是装完才发现不能跑；
+- 二进制仍要求 glibc ≥ 2.38（构建于 Ubuntu 24.04），与 tarball 一致。
+
 ## 7. 常见失败
 
 | 现象 | 原因 | 处理 |

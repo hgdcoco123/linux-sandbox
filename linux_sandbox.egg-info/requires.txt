@@ -1,0 +1,3 @@
+
+[sdk]
+protobuf>=3.20
