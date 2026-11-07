@@ -2,6 +2,13 @@
 
 版本号来自 `CMakeLists.txt` 的 `project(... VERSION)`；`sandbox --version` 打的是同一个值。
 
+## 未发布
+
+- `sandbox doctor` 在隔离不可用时给出可直接执行的处理建议：`isolation_probe.remedy` 字段按 `stage` 与环境策略
+  （`apparmor_restrict_unprivileged_userns`、`unprivileged_userns_clone`、cgroup）生成，同时打印到 stderr，
+  不再只报一个 stage 让用户自己猜。
+- 文档新增 `docs/INSTALL.md` 3.0：stage → 处理方式对照表，含只对 launcher 放行 `userns,` 的 AppArmor 配置。
+
 ## 0.5.1
 
 - 预编译包改为静态链接 libseccomp 与 protobuf（`-DSANDBOX_STATIC_DEPS=ON`）：二进制只依赖

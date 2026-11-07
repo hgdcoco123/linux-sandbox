@@ -7,6 +7,52 @@
 #include <unistd.h>
 namespace sandbox {
 namespace {
+// The probe can only report where isolation stopped. Turning that into "what do I type next"
+// here means a user never has to guess between the sysctl, the AppArmor profile and the
+// delegated-cgroup route.
+std::string probe_remedy(const Json &probe, const Json &policy) {
+    const auto text = [](const Json &value, const char *key) -> std::string {
+        if (!value.contains(key))
+            return {};
+        if (value[key].is_string())
+            return value[key].get<std::string>();
+        if (value[key].is_number())
+            return std::to_string(value[key].get<std::int64_t>());
+        return {};
+    };
+    const auto stage = text(probe, "stage");
+    const auto number = text(policy, "apparmor_restrict_unprivileged_userns");
+    const auto clone = text(policy, "unprivileged_userns_clone");
+    const bool restricted = number.rfind("1", 0) == 0;
+    const bool clone_off = clone.rfind("0", 0) == 0;
+    if (stage == "make_mounts_private" && restricted)
+        return "kernel.apparmor_restrict_unprivileged_userns=1 blocks unprivileged user "
+               "namespaces. Temporarily: sudo sysctl -w "
+               "kernel.apparmor_restrict_unprivileged_userns=0 (restore it afterwards). "
+               "Permanently: allow it for this launcher with an AppArmor profile that grants "
+               "`userns,` plus the launcher path. See docs/INSTALL.md section 3.0.";
+    if (stage == "make_mounts_private" && clone_off)
+        return "kernel.unprivileged_userns_clone=0 disables user namespaces. Try: sudo sysctl -w "
+               "kernel.unprivileged_userns_clone=1. See docs/INSTALL.md section 3.0.";
+    if (stage == "make_mounts_private")
+        return "mount namespaces cannot be made private in this environment (container without "
+               "CAP_SYS_ADMIN, or a restrictive LSM). Use the diagnostic backend (--process) for "
+               "the pipeline, or run on a host that allows unprivileged user namespaces. See "
+               "docs/INSTALL.md section 3.0.";
+    if (stage == "create_user_mount_namespace")
+        return "creating a user namespace failed. Check /proc/sys/user/max_user_namespaces and "
+               "any LSM denial in dmesg; run `sandbox doctor` inside "
+               "`systemd-run --user -p Delegate=yes` to separate the two problems (docs/INSTALL.md 3.0).";
+    if (stage == "cgroup")
+        return "no delegated cgroup subtree. Run inside `systemd-run --user -p Delegate=yes`, or "
+               "prepare one with tools/cgroup_setup.py and pass --cgroup-root. See "
+               "docs/INSTALL.md section 3.1.";
+    if (stage == "probe_process")
+        return "the probe process itself failed; this is a harness problem, not a host policy. "
+               "Attach the full `sandbox doctor` output to an issue.";
+    return "isolation is unavailable for an unclassified reason; `sandbox doctor` reports the "
+           "stage, docs/INSTALL.md section 3.0 maps stages to fixes.";
+}
 bool prefix(const fs::path &a, const fs::path &b) {
     auto i = a.begin(), j = b.begin();
     for (; j != b.end(); ++j, ++i)
@@ -95,6 +141,8 @@ Json SandboxService::doctor(const fs::path &root) const {
         {"running_as_root", ::geteuid() == 0},
         {"runtime_elevation", false},
         {"guide", "docs/INSTALL.md"}};
+    if (!j["isolation_probe"].value("available", false))
+        j["isolation_probe"]["remedy"] = probe_remedy(j["isolation_probe"], j["security_policy"]);
     return j;
 }
 Json SandboxService::inspect(const std::string &id) const {

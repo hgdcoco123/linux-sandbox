@@ -364,6 +364,14 @@ int main(int argc, char **argv) {
             output = app.cleanup();
         if (!synthetic.empty())
             std::remove(synthetic.c_str());
+        // Someone who reads only the terminal should not have to parse JSON to learn why
+        // isolation is unavailable: the JSON stays on stdout, the fix goes to stderr.
+        if (command == "doctor" && output.contains("isolation_probe") &&
+            !output["isolation_probe"].value("available", false) &&
+            output["isolation_probe"].contains("remedy") &&
+            output["isolation_probe"]["remedy"].is_string())
+            std::cerr << "isolation unavailable: "
+                      << output["isolation_probe"]["remedy"].get<std::string>() << '\n';
         std::cout << output.dump(2, ' ', false, sandbox::Json::error_handler_t::replace) << '\n';
         return code;
     } catch (const sandbox::SessionError &e) {

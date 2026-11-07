@@ -70,6 +70,34 @@ sandbox doctor
 
 `process` 模式不是安全边界，只用于"本机诊断"；它也会写 `result.json`、`internal.log`、`stdout/stderr.bin`，所以下游分析可以复用。
 
+## 3.0 隔离不可用：按 `doctor` 的 stage 处理
+
+`sandbox doctor` 在隔离不可用时会给出 `isolation_probe.stage`，并在 **stderr** 打印一句可以直接执行的
+处理建议（`isolation_probe.remedy` 字段里有同样内容）。常见三种：
+
+| stage | 现象 | 处理 |
+|---|---|---|
+| `make_mounts_private` + `apparmor_restrict_unprivileged_userns: "1"` | 创建 user namespace 成功，但 `mount --make-private` 被 AppArmor 拒绝（errno 13） | 临时：`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`，用完改回 1；永久：给 `sandbox-launcher` 加一个授予 `userns,` 的 AppArmor 配置 |
+| `make_mounts_private` + `unprivileged_userns_clone: "0"` | Debian 系的旧开关关掉了 user namespace | `sudo sysctl -w kernel.unprivileged_userns_clone=1` |
+| `cgroup` | 没有可委派的 cgroup 子树 | 见下面 3.1：`systemd-run --user -p Delegate=yes` 或 `tools/cgroup_setup.py` |
+
+永久放行 AppArmor 的做法（Ubuntu 23.10+）：
+
+```bash
+# 只对这个 launcher 放行 userns，不改全局 sysctl
+sudo tee /etc/apparmor.d/linux-sandbox-launcher >/dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+profile linux-sandbox-launcher /opt/linux-sandbox-*/bin/sandbox-launcher flags=(unconfined) {
+  userns,
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/linux-sandbox-launcher
+```
+
+改完重新跑 `sandbox doctor`，`available` 应为 `true`。**这两条都需要 root，且属于宿主策略变更**；
+`doctor` 的 `host_policy_modified` 字段始终是 `false`，表示工具自己不会去改任何系统设置。
+
 ## 3.1 没有 systemd 怎么办
 
 沙箱需要的是**一个可写、无进程、暴露了 cpu/memory/pids 的 cgroup v2 子树**。systemd 只是来源之一，

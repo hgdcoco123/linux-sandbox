@@ -22,6 +22,11 @@ if probe["available"]:
     assert probe["stage"] == "completed"
 else:
     assert probe.get("stage") and probe.get("error"), probe
+    # A stage without a next step is a dead end for whoever reads the output.
+    remedy = probe.get("remedy")
+    assert isinstance(remedy, str) and len(remedy) > 30, probe
+    assert "docs/INSTALL.md" in remedy, probe
+    assert "isolation unavailable" in result.stderr, result.stderr
 assert os.stat("/proc/self/ns/mnt").st_ino == namespace
 assert os.getuid() == uid
 assert before == {name: Path(name).read_text() for name in before}

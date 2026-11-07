@@ -1,0 +1,44 @@
+[  2%] Built target sandbox-fixture
+[  4%] Built target sandbox_writer
+[ 17%] Built target sandbox_core
+[ 19%] Built target writer_tests
+[ 21%] Built target wire_tests
+[ 23%] Built target supervisor_tests
+[ 25%] Built target core_tests
+[ 27%] Built target prepare_tests
+[ 29%] Built target control_tests
+[ 31%] Built target fault_tests
+[ 33%] Built target workspace_tests
+[ 38%] Built target sandbox_model
+[ 40%] Built target ops_json_tests
+[ 42%] Built target model_tests
+[ 44%] Built target session_contract_tests
+[ 46%] Built target session_model_tests
+[ 48%] Built target sandbox_metrics
+[ 51%] Built target task_tests
+[ 53%] Built target writer_benchmark
+[ 55%] Built target metrics_tests
+[ 56%] Building CXX object CMakeFiles/sandbox_runtime.dir/src/application/service.cpp.o
+[ 57%] Linking CXX static library libsandbox_runtime.a
+[ 79%] Built target sandbox_runtime
+[ 80%] Building CXX object CMakeFiles/sandbox.dir/apps/cli/main.cpp.o
+[ 81%] Linking CXX executable control_fd_tests
+[ 82%] Linking CXX executable session_wire_tests
+[ 83%] Linking CXX executable sandbox-launcher
+[ 84%] Built target control_fd_tests
+[ 85%] Linking CXX executable output_runtime_tests
+[ 86%] Built target sandbox-launcher
+[ 87%] Linking CXX executable session_store_tests
+[ 88%] Built target session_wire_tests
+[ 90%] Linking CXX executable publish_tests
+[ 90%] Built target output_runtime_tests
+[ 91%] Linking CXX executable mount_source_tests
+[ 92%] Built target mount_source_tests
+[ 93%] Linking CXX executable session_runtime_tests
+[ 94%] Built target publish_tests
+[ 95%] Linking CXX executable session_wire_bridge
+[ 96%] Built target session_runtime_tests
+[ 97%] Built target session_store_tests
+[ 98%] Built target session_wire_bridge
+[100%] Linking CXX executable sandbox
+[100%] Built target sandbox

@@ -196,7 +196,7 @@ sandbox prune --keep 20 --older-than 7d              # 只删已结束的运行
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `isolated mode requires runtime_root and cgroup_root` | 缺参数 | 补 `--runtime` / `--cgroup-root`，或明确用 `--process` |
-| `doctor` 报 `make_mounts_private: Permission denied` | 内核限制非特权 user namespace | 见 [INSTALL.md](INSTALL.md) 第 3.1 节 |
+| `doctor` 报 `make_mounts_private: Permission denied` | AppArmor 限制非特权 user namespace（Ubuntu 23.10+ 默认） | `doctor` 会在 stderr 直接给出命令；详见 [INSTALL.md](INSTALL.md) 3.0 |
 | 报 `cgroup ... no controllers` | 子树没委派 cpu/memory/pids | 用 `systemd-run --user -p Delegate=yes` 包一层，或 `tools/cgroup_setup.py` |
 | 目标 `startup_failure`，stderr 空 | runtime 里缺解释器或动态库 | `ldd` 检查；用 [RUNTIME.md](RUNTIME.md) 的方法准备 runtime |
 | 目标启动失败但没有输出 | 目标在 exec 前就被拒绝（seccomp/权限） | 看 `internal.log` 与 `errors[]` |
