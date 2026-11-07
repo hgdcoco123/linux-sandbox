@@ -298,6 +298,15 @@ python3 -m sandbox_ai --provider compatible explain --run-dir /path/to/state/run
 **分析带出的事实**；完整 report 也修不好 → 沙箱负责"发生了什么"，分析层负责"缺什么"。细节与边界见
 [VALUE.md](VALUE.md)。
 
+### 隔离端到端（2026-11-07，真机重跑）
+
+临时放宽 `kernel.apparmor_restrict_unprivileged_userns` 后（脚本自动恢复），`tools/ai-verify-e2e.sh` 在
+`systemd-run --user -p Delegate=yes` 里完成一次真实隔离运行：`isolated=true`、`verdict=ok`、
+`export.ok=true`（1 个产物 + `artifact-manifest.json`，`durable=true`）、`checksums.json` 存在、
+清理三项全 true，7 条必检行全绿。**这才算隔离路径被验证**——`ctest` 里的
+`isolation_integration` 在没有 `SANDBOX_TEST_RUNTIME`/`SANDBOX_TEST_CGROUP` 时是跳过的，
+34/34 本身不覆盖隔离。
+
 ## 未验证
 
 - **诊断质量的普适性**：`qwen-plus` 三轮 1/4、1/4、0/4（引用拼接）；`qwen3.8-max` 3/4、结论 3/3 正确。
