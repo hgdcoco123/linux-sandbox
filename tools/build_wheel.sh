@@ -33,19 +33,30 @@ stage=linux_sandbox_bin
 cleanup() { rm -rf "$stage" build/bdist.* 2>/dev/null || true; }
 trap cleanup EXIT
 
-rm -rf "$stage" dist
+rm -rf "$stage" dist build/bdist.* *.egg-info
 mkdir -p "$stage"
 cp "$build_dir/sandbox" "$build_dir/sandbox-launcher" "$stage/"
 chmod 0755 "$stage"/*
 : > "$stage/__init__.py"
 echo "build_wheel: staged $stage/sandbox and $stage/sandbox-launcher"
 
-python3 -m build --wheel --no-isolation --outdir dist >/tmp/build-wheel.log 2>&1 \
-    || { tail -20 /tmp/build-wheel.log; fail "python -m build failed (need: pip install build wheel)"; }
+# PyPI refuses linux_x86_64: a wheel that runs on a distribution must say which glibc floor it
+# needs. The binaries are built against the host glibc, so that floor is the host's version.
+# Ask the binary what it actually needs rather than assuming the host: the answer decides which
+# systems can install this wheel at all.
+need=$(objdump -T "$build_dir/sandbox" 2>/dev/null | grep -o 'GLIBC_[0-9.]\+' | sort -uV | tail -1 | sed 's/GLIBC_//' || true)
+[ -n "$need" ] || need=$(ldd --version 2>/dev/null | head -1 | grep -o '[0-9]\+\.[0-9]\+$' || true)
+plat="${SBX_WHEEL_PLAT:-manylinux_$(printf '%s' "${need:-2.38}" | tr '.' '_')_x86_64}"
+echo "build_wheel: platform tag $plat (binary needs glibc ${need:-unknown})"
 
-wheel=$(ls dist/*.whl | head -1)
+python3 setup.py -q bdist_wheel --plat-name "$plat" >/tmp/build-wheel.log 2>&1 \
+    || { tail -20 /tmp/build-wheel.log; fail "python setup.py bdist_wheel failed (need: pip install wheel)"; }
+wheel=$(ls dist/*.whl 2>/dev/null | head -1)
+[ -n "$wheel" ] || fail "no wheel produced; see /tmp/build-wheel.log"
 case "$wheel" in
     *py3-none-any*) fail "wheel is tagged pure python; setup.py's bdist_wheel override did not apply" ;;
+    *manylinux*) ;;
+    *) fail "wheel platform tag is not acceptable to PyPI: $wheel" ;;
 esac
 
 echo "build_wheel: $wheel"

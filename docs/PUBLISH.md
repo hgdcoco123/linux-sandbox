@@ -111,12 +111,28 @@ bash tools/build_wheel.sh                 # 需要先有静态构建：-DSANDBOX
 脚本会检查：二进制与 `pyproject.toml` 版本一致、二进制确实静态链接、wheel 里有 `sandbox` 与
 `sandbox-launcher` 且可执行、wheel 不是 `py3-none-any`（防止被装到 macOS 上）。
 
-上传（需要 pypi.org 账号与 token）：
+wheel 的平台标签由**二进制实际需要的 glibc 符号**算出（`objdump -T` 取最高 `GLIBC_*`），
+所以是 `manylinux_2_38_x86_64` 而不是 `linux_x86_64`——PyPI 只接受 `manylinux*`。
+可用 `SBX_WHEEL_PLAT` 覆盖。
+
+上传（需要 pypi.org 账号与 token；Ubuntu 上 `pip install --user` 会被 PEP 668 拦，加
+`--break-system-packages` 或改用 venv/pipx）：
 
 ```bash
-python3 -m pip install --user twine
-python3 -m twine upload dist/linux_sandbox-<ver>-py3-none-linux_x86_64.whl
+python3 -m pip install --user --break-system-packages twine
+
+# 把 token 放进 ~/.pypirc（chmod 600），再 upload 就不用交互输入
+cat > ~/.pypirc <<'EOF'
+[pypi]
+username = __token__
+password = pypi-XXXXXXXX
+EOF
+chmod 600 ~/.pypirc
+
+python3 -m twine upload dist/linux_sandbox-<ver>-py3-none-manylinux_2_38_x86_64.whl
 ```
+
+首次上传会自动创建项目 `linux-sandbox`（该名字在 PyPI 上可用）。
 
 发布后用户侧：
 
