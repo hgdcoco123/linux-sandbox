@@ -46,6 +46,9 @@ export PATH="/opt/linux-sandbox-<ver>-linux-<arch>/bin:$PATH"
 （Debian/Ubuntu 上分别是 `libseccomp2`、`libprotobuf32`/`libprotobuf32t64`，且 soname 必须匹配）。
 `tools/pack.sh` 会在打包时把实际依赖打印出来。
 
+**glibc 下限**：发布包在 Ubuntu 24.04 上构建，要求 `GLIBC_2.38` / `GLIBCXX_3.4.32`。
+更老的系统（如 Ubuntu 22.04）请从源码构建。
+
 ## 3. 三种启动模式
 
 判定顺序：**systemd 用户委派 → 显式 `cgroup_root` → `process` 诊断模式**。
