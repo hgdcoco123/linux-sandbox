@@ -38,9 +38,15 @@ if [ "$skip_build" = 0 ]; then
     }
 fi
 
+# Before testing behaviour, refuse to call a tree "verified" while it carries something that looks
+# like a credential. Fast mode: the working tree is what a commit would ship.
+status=0
+echo "== secrets"
+bash tools/check-secrets.sh --fast || status=1
+
 echo "== test"
-ctest --test-dir build --output-on-failure
-status=$?
+# Not `status=$?`: that would erase an earlier secret-scan failure.
+ctest --test-dir build --output-on-failure || status=$?
 
 # The analysis layer's contracts are a CTest case above; this covers the part CTest cannot:
 # the offline demo and its aggregate metrics, on any host with Python 3.

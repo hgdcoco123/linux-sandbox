@@ -3,7 +3,7 @@
 # attached, so users who cannot reach GitHub still get source and a verified archive.
 #
 #   bash tools/mirror_to_gitee.sh --remote git@gitee.com:<user>/linux-sandbox.git
-#   bash tools/mirror_to_gitee.sh --remote ... --token <GITEE_TOKEN> --release v0.5.3
+#   GITEE_TOKEN=xxxx bash tools/mirror_to_gitee.sh --remote ... --release v0.5.3
 #   bash tools/mirror_to_gitee.sh --remote ... --dry-run
 #
 # What a mirror does NOT give you: `uses: <owner>/<repo>@v1` in GitHub Actions only resolves on
@@ -15,15 +15,16 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
 remote=""
-token=""
+token="${GITEE_TOKEN:-}"
 release=""
 dry_run=0
 fail() { echo "mirror: $*" >&2; exit 1; }
+say_warn() { echo "mirror: warning: $*" >&2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --remote) remote="$2"; shift 2 ;;
-        --token) token="$2"; shift 2 ;;
+        --token) token="$2"; say_warn "passing --token puts the value in your shell history; prefer GITEE_TOKEN=... bash tools/mirror_to_gitee.sh"; shift 2 ;;
         --release) release="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -82,12 +83,12 @@ if [ -z "$release" ]; then
    body : copy from docs/releases/v$version.md
    attach: ${asset}, ${asset}.sha256, and the wheel (if present)
 
-   or re-run with --token <GITEE_TOKEN> --release v$version to do it through the API.
+   or set GITEE_TOKEN and re-run with --release v$version to do it through the API.
 EOF
     exit 0
 fi
 
-[ -n "$token" ] || fail "--release needs --token (Gitee 私人令牌，勾选 projects 权限)"
+[ -n "$token" ] || fail "--release needs a token: set GITEE_TOKEN=... (Gitee 私人令牌，勾选 projects 权限)"
 
 # The archive is not always in dist/: it may have been fetched into ~/handoff earlier. Look in the
 # obvious places rather than making the user copy files around.

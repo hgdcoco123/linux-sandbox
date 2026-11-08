@@ -12,6 +12,10 @@ jobs:
           sudo apt-get install -y libseccomp-dev protobuf-compiler libprotobuf-dev python3-protobuf
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build --parallel 2
+      - name: Secrets
+        # A credential committed once is in history forever; catching it before the tests keeps
+        # the repository shippable.
+        run: bash tools/check-secrets.sh
       - name: ctest
         run: |
           set +e
